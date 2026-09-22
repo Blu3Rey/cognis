@@ -2,6 +2,9 @@ import { Cognis } from '../src/core.js';
 import { NodeSqliteDriver } from '../src/adapters/node-sqlite.js';
 import { FakeClock } from '../src/ports/clock.js';
 import { HashEmbedder } from '../src/adapters/hash-embedder.js';
+import { FixtureVocabulary } from '../src/adapters/fixture-vocabulary.js';
+import { RuleLinker } from '../src/adapters/rule-linker.js';
+import { VOCABULARY } from './fixtures/vocabulary.js';
 
 export async function freshCognis(start = '2026-01-01T00:00:00.000Z'): Promise<{
   cognis: Cognis;
@@ -12,6 +15,8 @@ export async function freshCognis(start = '2026-01-01T00:00:00.000Z'): Promise<{
     db: new NodeSqliteDriver(),
     clock,
     embedder: new HashEmbedder(),
+    vocabulary: new FixtureVocabulary(VOCABULARY),
+    linker: new RuleLinker(),
   });
   await cognis.migrate();
   return { cognis, clock };
@@ -22,10 +27,12 @@ export async function ingest(
   cognis: Cognis,
   url: string,
   text: string,
+  title?: string,
 ): Promise<{ sourceId: string; ingestionEventId: string; documentVersionId: string }> {
   const { textFingerprint } = await import('../src/canonical/hash.js');
   const cap = await cognis.capture({
     kind: 'url', payload: url, capturePath: 'share_sheet',
+    ...(title === undefined ? {} : { title }),
   });
   const dv = await cognis.recordExtraction({
     sourceId: cap.sourceId,

@@ -11,6 +11,7 @@ import type { SqlDriver } from '../ports/sql.js';
 import type { Clock } from '../ports/clock.js';
 import * as m001 from './migrations/001_initial.js';
 import * as m002 from './migrations/002_chunks_embeddings.js';
+import * as m003 from './migrations/003_concepts.js';
 
 export interface Migration {
   id: string;
@@ -21,6 +22,7 @@ export interface Migration {
 export const MIGRATIONS: readonly Migration[] = [
   { id: m001.id, up: m001.up },
   { id: m002.id, up: m002.up },
+  { id: m003.id, up: m003.up },
 ];
 
 const MIGRATION_TABLE = `

@@ -79,6 +79,46 @@ export const TABLES: readonly TableSpec[] = [
     columns: ['chunk_id', 'model_id', 'vector'],
   },
   {
+    name: 'concept',
+    attested: false,
+    // Exported despite being derived: concept ids are external and stable, and
+    // carrying them means an imported corpus keeps its graph identity even
+    // before a relink runs.
+    exportable: true,
+    columns: [
+      'id', 'scheme', 'label', 'description', 'aliases_json', 'resolved_at',
+      'promoted_from',
+    ],
+  },
+  {
+    name: 'mention',
+    attested: false,
+    exportable: false,
+    columns: [
+      'id', 'chunk_id', 'concept_id', 'start_char', 'end_char', 'surface_form',
+      'confidence', 'is_primary', 'producer_version', 'model_id', 'prompt_version',
+    ],
+  },
+  {
+    name: 'edge',
+    attested: false,
+    exportable: false,
+    columns: [
+      'id', 'from_concept', 'to_concept', 'relation', 'provenance', 'weight',
+      'producer_version',
+    ],
+  },
+  {
+    name: 'coverage',
+    attested: false,
+    exportable: false,
+    columns: [
+      'concept_id', 'distinct_sources', 'primary_sources', 'first_contact_at',
+      'last_contact_at', 'temporal_spread_days', 'max_engagement',
+      'contact_count', 'has_user_annotation', 'computed_at', 'producer_version',
+    ],
+  },
+  {
     name: 'reading_session',
     attested: true,
     exportable: true,

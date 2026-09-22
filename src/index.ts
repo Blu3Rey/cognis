@@ -45,6 +45,38 @@ export type { NoveltyResult } from './embed/novelty.js';
 export { putVector, scanVectors, vectorCount } from './embed/store.js';
 export type { StoredVector, ScanOptions } from './embed/store.js';
 
+export type {
+  VocabularyClient, ConceptCandidate, VocabularyEdge,
+} from './ports/vocabulary.js';
+export type { Linker, LinkRequest, LinkDecision, SpottedMention } from './ports/linker.js';
+export { FixtureVocabulary } from './adapters/fixture-vocabulary.js';
+export type { FixtureConcept } from './adapters/fixture-vocabulary.js';
+export { RuleLinker } from './adapters/rule-linker.js';
+export type { RuleLinkerOptions } from './adapters/rule-linker.js';
+
+export { spotMentions, SPOTTER_VERSION } from './concept/spotter.js';
+export type { Spot, SpotOptions } from './concept/spotter.js';
+export {
+  linkDocument, linkAll, importHierarchy, localKeyFor, LINKER_PIPELINE_VERSION,
+} from './concept/pipeline.js';
+export type { LinkOptions, LinkReport } from './concept/pipeline.js';
+export {
+  loadOverrides, applyOverrides, resolveConceptId, rejectionKey, pairKey,
+} from './concept/overrides.js';
+export type { OverrideSet } from './concept/overrides.js';
+export { proposeMerges } from './concept/consolidate.js';
+export type { MergeProposal, ConsolidateOptions } from './concept/consolidate.js';
+
+export { rollupCoverage, coverageFor, ROLLUP_VERSION } from './coverage/rollup.js';
+export type { CoverageRow } from './coverage/rollup.js';
+export { uncoveredButRecurring, taxonomy, staleCoverage } from './coverage/queries.js';
+export type { ConceptGap, UncoveredOptions, TaxonomyNode } from './coverage/queries.js';
+
+export { runLinkingEval, identityStability, formatReport } from './eval/linking.js';
+export type {
+  GoldMention, GoldDocument, LinkingMetrics, LinkingEvalReport,
+} from './eval/linking.js';
+
 export { semanticSearch, literalSearch } from './search/semantic.js';
 export type { SearchHit, SearchOptions } from './search/semantic.js';
 

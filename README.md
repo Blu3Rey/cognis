@@ -85,6 +85,19 @@ schema and in review.
 | ONNX embedder | device-side, not started |
 | `sqlite-vec` ANN index | device-side; portable brute-force scan in place |
 
+| M2 item | State |
+|---|---|
+| Candidate spotting (proper nouns, acronyms, definitions, n-grams) | done |
+| Vocabulary candidate generation behind a port | done |
+| Disambiguation behind a port, with `is_primary` | done |
+| Local concepts and consolidation proposals | done |
+| User merge / split / reject, re-applied after every rebuild | done |
+| Coverage rollup and `uncoveredButRecurring` | done |
+| Taxonomy tree from vocabulary hierarchy | done |
+| Linking eval harness (precision, recall, NIL, identity stability) | done |
+| **≥200-mention labelled eval set** | **seed set only — see [eval/README.md](eval/README.md)** |
+| Wikidata client; model-backed linker | client/backend-side, not started |
+
 Extraction and the UI are client concerns: core defines the ports and owns the
 state machine, and the client supplies the WebView extractor. See
 [ADR-0003](docs/adr/0003-stack-selection.md).
@@ -111,6 +124,9 @@ src/
   capture/          the attested write path, prior coverage, deletion
   chunk/            structural chunking with heading breadcrumbs
   embed/            vector storage, the embed pipeline, novelty
+  concept/          spotting, linking, overrides, consolidation
+  coverage/         the rollup and the gap queries
+  eval/             the linking evaluation harness
   search/           semantic and literal search
   export/           JSONL export/import and the table manifest
   core.ts           the facade from docs/10-api-contract.md

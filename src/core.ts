@@ -29,6 +29,16 @@ import type { NoveltyResult } from './embed/novelty.js';
 import { semanticSearch, literalSearch } from './search/semantic.js';
 import type { SearchHit, SearchOptions } from './search/semantic.js';
 import type { ChunkOptions } from './chunk/chunker.js';
+import type { VocabularyClient } from './ports/vocabulary.js';
+import type { Linker } from './ports/linker.js';
+import { linkDocument, linkAll, importHierarchy } from './concept/pipeline.js';
+import type { LinkOptions, LinkReport } from './concept/pipeline.js';
+import { proposeMerges } from './concept/consolidate.js';
+import type { MergeProposal, ConsolidateOptions } from './concept/consolidate.js';
+import { rollupCoverage, coverageFor } from './coverage/rollup.js';
+import type { CoverageRow } from './coverage/rollup.js';
+import { uncoveredButRecurring, taxonomy, staleCoverage } from './coverage/queries.js';
+import type { ConceptGap, UncoveredOptions, TaxonomyNode } from './coverage/queries.js';
 import { toSource, toIngestionEvent } from './capture/rows.js';
 import type { SourceRow, IngestionEventRow } from './capture/rows.js';
 import type {
@@ -46,17 +56,34 @@ export interface CognisOptions {
    * semantic search are unavailable and say so rather than returning silence.
    */
   embedder?: Embedder;
+  /** Candidate generation. Required for concept linking. */
+  vocabulary?: VocabularyClient;
+  /** Disambiguation. Required for concept linking. */
+  linker?: Linker;
 }
 
 export class Cognis {
   readonly db: SqlDriver;
   readonly clock: Clock;
   readonly embedder: Embedder | null;
+  readonly vocabulary: VocabularyClient | null;
+  readonly linker: Linker | null;
 
   constructor(opts: CognisOptions) {
     this.db = opts.db;
     this.clock = opts.clock ?? systemClock;
     this.embedder = opts.embedder ?? null;
+    this.vocabulary = opts.vocabulary ?? null;
+    this.linker = opts.linker ?? null;
+  }
+
+  #requireLinking(feature: string): { vocabulary: VocabularyClient; linker: Linker } {
+    if (!this.vocabulary || !this.linker) {
+      throw new Error(
+        `${feature} needs a vocabulary and a linker; construct Cognis with both`,
+      );
+    }
+    return { vocabulary: this.vocabulary, linker: this.linker };
   }
 
   #requireEmbedder(feature: string): Embedder {
@@ -167,6 +194,81 @@ export class Cognis {
   /** Re-embed the whole corpus. A scoped rebuild, not a migration. */
   async reembedAll(opts: ChunkOptions = {}): Promise<ReembedReport> {
     return reembedAll(this.db, this.clock, this.#requireEmbedder('reembedAll'), opts);
+  }
+
+  // -- Concepts and coverage (M2) ------------------------------------------
+
+  /** Link one document version. Idempotent; re-running is a scoped rebuild. */
+  async linkDocument(documentVersionId: Ulid, opts: LinkOptions = {}): Promise<LinkReport> {
+    const { vocabulary, linker } = this.#requireLinking('linkDocument');
+    return linkDocument(this.db, this.clock, vocabulary, linker, documentVersionId, opts);
+  }
+
+  /** Relink the whole corpus. Concept ids do not move; evidence is recomputed. */
+  async linkAll(opts: LinkOptions = {}): Promise<LinkReport[]> {
+    const { vocabulary, linker } = this.#requireLinking('linkAll');
+    return linkAll(this.db, this.clock, vocabulary, linker, opts);
+  }
+
+  /** Pull vocabulary hierarchy edges for concepts already in the corpus. */
+  async importHierarchy(): Promise<{ edges: number; ancestorsAdded: number }> {
+    const { vocabulary } = this.#requireLinking('importHierarchy');
+    return importHierarchy(this.db, this.clock, vocabulary);
+  }
+
+  /** Recompute the coverage rollup from mentions and attested rows. */
+  async rollupCoverage(): Promise<{ concepts: number }> {
+    return rollupCoverage(this.db, this.clock);
+  }
+
+  async coverageFor(conceptId: string): Promise<CoverageRow | null> {
+    return coverageFor(this.db, conceptId);
+  }
+
+  /**
+   * Concepts met from several sources but never covered directly — the
+   * flagship query, and the first question in the success test.
+   */
+  async uncoveredButRecurring(opts: UncoveredOptions = {}): Promise<ConceptGap[]> {
+    return uncoveredButRecurring(this.db, opts);
+  }
+
+  async taxonomy(
+    opts: { rootConceptId?: string | null; includeUncovered?: boolean } = {},
+  ): Promise<TaxonomyNode[]> {
+    return taxonomy(this.db, opts);
+  }
+
+  async staleCoverage(opts: { before: string; limit?: number }): Promise<ConceptGap[]> {
+    return staleCoverage(this.db, opts);
+  }
+
+  /** Propose local-concept merges. Only high-confidence ones auto-apply. */
+  async proposeMerges(opts: ConsolidateOptions = {}): Promise<MergeProposal[]> {
+    return proposeMerges(this.db, this.#requireEmbedder('proposeMerges'), opts);
+  }
+
+  /** Record a user correction. Attested, and re-applied after every rebuild. */
+  async assert(a: {
+    kind: 'quality' | 'not_interested' | 'concept_merge' | 'concept_split'
+      | 'mention_reject' | 'mention_add' | 'known_already';
+    subjectType: 'source' | 'concept' | 'mention';
+    subjectId: string;
+    objectId?: string | null;
+    value?: number | null;
+    note?: string | null;
+  }): Promise<{ assertionId: Ulid }> {
+    const id = ulid(this.clock.nowMs());
+    await this.db.run(
+      `INSERT INTO user_assertion
+         (id, kind, subject_type, subject_id, object_id, value, note, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id, a.kind, a.subjectType, a.subjectId, a.objectId ?? null,
+        a.value ?? null, a.note ?? null, this.clock.now(),
+      ],
+    );
+    return { assertionId: id };
   }
 
   // -- Search --------------------------------------------------------------
