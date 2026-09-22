@@ -185,13 +185,23 @@ CREATE TABLE chunk (
   UNIQUE (document_version_id, ordinal)
 );
 
--- Vectors live in a sqlite-vec virtual table keyed by chunk id; this table is
--- the metadata side, so a re-embed is a scoped delete by model_id.
+-- Vector storage is split in two so the device and the portable build differ
+-- in one table rather than in the schema: `embedding_meta` is the metadata
+-- side, and the vectors themselves live in `embedding_vector` (a float32 blob)
+-- or, on device, in a sqlite-vec virtual table keyed by chunk id. A re-embed
+-- is a scoped delete by model_id either way.
 CREATE TABLE embedding_meta (
   chunk_id     TEXT NOT NULL REFERENCES chunk(id) ON DELETE CASCADE,
   model_id     TEXT NOT NULL,
   dim          INTEGER NOT NULL,
   computed_at  TEXT NOT NULL,
+  PRIMARY KEY (chunk_id, model_id)
+);
+
+CREATE TABLE embedding_vector (
+  chunk_id TEXT NOT NULL REFERENCES chunk(id) ON DELETE CASCADE,
+  model_id TEXT NOT NULL,
+  vector   BLOB NOT NULL,          -- little-endian float32
   PRIMARY KEY (chunk_id, model_id)
 );
 
@@ -327,6 +337,21 @@ rebuild(stage, from_version) :=
 The override re-application step is the one most likely to be forgotten and the
 one whose absence users notice most painfully: a rebuild that silently un-merges
 concepts the user merged by hand teaches them never to correct anything again.
+
+## What is exported
+
+Attested tables are always exported: losing one is unrecoverable. Derived
+tables are exported only when recomputing them would be expensive or lossy.
+
+| Table | Exported | Why |
+|---|---|---|
+| all attested tables | yes | irreplaceable |
+| `document_version` | yes | re-extraction needs the source to still be reachable, and the raw text is what makes re-chunking possible |
+| `chunk`, `embedding_meta`, `embedding_vector` | **no** | a deterministic function of `document_version` plus the chunker and embedder; float32 vectors would dominate the export's size for data the importing device regenerates offline in seconds |
+
+An import therefore lands with no chunks and no vectors, and the importing
+device rebuilds them. That is the attested/derived split doing its job, and the
+round-trip test asserts it explicitly rather than treating the absence as loss.
 
 ## Retention of the raw
 

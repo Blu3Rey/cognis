@@ -21,6 +21,67 @@ import { deleteSource } from './capture/delete.js';
 import type { DeleteReport } from './capture/delete.js';
 import { exportJsonl, exportJsonlString, importJsonl, linesOf } from './export/jsonl.js';
 import type { ImportReport } from './export/jsonl.js';
+import type { Embedder } from './ports/embedder.js';
+import { chunkAndEmbed, reembedAll } from './embed/pipeline.js';
+import type { ChunkAndEmbedResult, ReembedReport } from './embed/pipeline.js';
+import { computeNovelty, recordNovelty } from './embed/novelty.js';
+import type { NoveltyResult } from './embed/novelty.js';
+import { semanticSearch, literalSearch } from './search/semantic.js';
+import type { SearchHit, SearchOptions } from './search/semantic.js';
+import type { ChunkOptions } from './chunk/chunker.js';
+import type { VocabularyClient } from './ports/vocabulary.js';
+import type { Linker } from './ports/linker.js';
+import { linkDocument, linkAll, importHierarchy } from './concept/pipeline.js';
+import type { LinkOptions, LinkReport } from './concept/pipeline.js';
+import { proposeMerges } from './concept/consolidate.js';
+import type { MergeProposal, ConsolidateOptions } from './concept/consolidate.js';
+import { rollupCoverage, coverageFor } from './coverage/rollup.js';
+import type { CoverageRow } from './coverage/rollup.js';
+import { uncoveredButRecurring, taxonomy, staleCoverage } from './coverage/queries.js';
+import type { ConceptGap, UncoveredOptions, TaxonomyNode } from './coverage/queries.js';
+import type { ItemWriter } from './ports/item-writer.js';
+import type { Grader } from './ports/grader.js';
+import { Scheduler, rebuildMemoryStates } from './retention/scheduler.js';
+import type { SchedulerOptions, ReviewRating } from './retention/scheduler.js';
+import { generateItems, generateItemsForConcept, retireItem } from './retention/items.js';
+import type { GenerateItemsOptions, GenerateItemsReport } from './retention/items.js';
+import {
+  dueItems, submitReview, overrideGrade, nextDueAt, dueCountOn,
+} from './retention/session.js';
+import type {
+  ReviewCard, SessionOptions, SubmitReviewInput, ReviewResult,
+} from './retention/session.js';
+import {
+  retentionEvidence, calibration, anomalousItems,
+} from './retention/evidence.js';
+import type { RetentionEvidence, CalibrationReport } from './retention/evidence.js';
+import type { ScholarGraph } from './ports/scholar-graph.js';
+import { ingestCitations, convergentReferences } from './suggest/citations.js';
+import type { CitationIngestReport, ConvergentReference } from './suggest/citations.js';
+import {
+  buildCooccurrence, conceptClusters, bridgeGaps, taxonomyHoles,
+} from './suggest/structural.js';
+import type { ConceptCluster, BridgeGap, TaxonomyHole } from './suggest/structural.js';
+import {
+  generateSuggestions, activeSuggestions, dismissSuggestion,
+} from './suggest/rank.js';
+import type { Suggestion, GenerateSuggestionsOptions } from './suggest/rank.js';
+import { recordTelemetry } from './reader/telemetry.js';
+import type { RawTelemetry, RecordTelemetryResult } from './reader/telemetry.js';
+import { neighbourhood } from './graph/neighbourhood.js';
+import type { Neighbourhood, NeighbourhoodOptions } from './graph/neighbourhood.js';
+import { evaluateEngagementPrior } from './eval/engagement.js';
+import type { EngagementComparison } from './eval/engagement.js';
+import type { SyncRelay } from './ports/sync-relay.js';
+import type { KeyDerivation } from './ports/key-derivation.js';
+import {
+  SyncCipher, newKeyset, describeRecovery, Pbkdf2KeyDerivation,
+} from './sync/crypto.js';
+import type { SyncKeyset } from './sync/crypto.js';
+import {
+  push, pull, saveKeyset, loadKeyset, deviceId, resetPullCursor,
+} from './sync/sync.js';
+import type { PushReport, PullReport } from './sync/sync.js';
 import { toSource, toIngestionEvent } from './capture/rows.js';
 import type { SourceRow, IngestionEventRow } from './capture/rows.js';
 import type {
@@ -32,15 +93,97 @@ import { ulid } from './ids.js';
 export interface CognisOptions {
   db: SqlDriver;
   clock?: Clock;
+  /**
+   * Optional until M1 features are used. Absent means the corpus still
+   * captures, exports and deletes — it simply has no vectors, so novelty and
+   * semantic search are unavailable and say so rather than returning silence.
+   */
+  embedder?: Embedder;
+  /** Candidate generation. Required for concept linking. */
+  vocabulary?: VocabularyClient;
+  /** Disambiguation. Required for concept linking. */
+  linker?: Linker;
+  /** Quiz item generation. Required for M3 features. */
+  itemWriter?: ItemWriter;
+  /** Answer grading. Required to submit reviews. */
+  grader?: Grader;
+  /** Scheduler configuration. A default scheduler is always constructed. */
+  scheduler?: SchedulerOptions;
+  /** Citation graph access. Required to ingest citations. */
+  scholarGraph?: ScholarGraph;
+  /** Encrypted blob relay. Required for sync. */
+  syncRelay?: SyncRelay;
+  /**
+   * Key derivation. Defaults to PBKDF2, which is portable but NOT memory-hard
+   * — a device build should inject Argon2id. See ports/key-derivation.ts.
+   */
+  keyDerivation?: KeyDerivation;
 }
 
 export class Cognis {
   readonly db: SqlDriver;
   readonly clock: Clock;
+  readonly embedder: Embedder | null;
+  readonly vocabulary: VocabularyClient | null;
+  readonly linker: Linker | null;
+  readonly itemWriter: ItemWriter | null;
+  readonly grader: Grader | null;
+  readonly scheduler: Scheduler;
+  readonly scholarGraph: ScholarGraph | null;
+  readonly syncRelay: SyncRelay | null;
+  readonly keyDerivation: KeyDerivation;
 
   constructor(opts: CognisOptions) {
     this.db = opts.db;
     this.clock = opts.clock ?? systemClock;
+    this.embedder = opts.embedder ?? null;
+    this.vocabulary = opts.vocabulary ?? null;
+    this.linker = opts.linker ?? null;
+    this.itemWriter = opts.itemWriter ?? null;
+    this.grader = opts.grader ?? null;
+    this.scheduler = new Scheduler(opts.scheduler ?? {});
+    this.scholarGraph = opts.scholarGraph ?? null;
+    this.syncRelay = opts.syncRelay ?? null;
+    this.keyDerivation = opts.keyDerivation ?? new Pbkdf2KeyDerivation();
+  }
+
+  #requireRelay(feature: string): SyncRelay {
+    if (!this.syncRelay) {
+      throw new Error(`${feature} needs a syncRelay; construct Cognis with one`);
+    }
+    return this.syncRelay;
+  }
+
+  #requireItemWriter(feature: string): ItemWriter {
+    if (!this.itemWriter) {
+      throw new Error(`${feature} needs an itemWriter; construct Cognis with one`);
+    }
+    return this.itemWriter;
+  }
+
+  #requireGrader(feature: string): Grader {
+    if (!this.grader) {
+      throw new Error(`${feature} needs a grader; construct Cognis with one`);
+    }
+    return this.grader;
+  }
+
+  #requireLinking(feature: string): { vocabulary: VocabularyClient; linker: Linker } {
+    if (!this.vocabulary || !this.linker) {
+      throw new Error(
+        `${feature} needs a vocabulary and a linker; construct Cognis with both`,
+      );
+    }
+    return { vocabulary: this.vocabulary, linker: this.linker };
+  }
+
+  #requireEmbedder(feature: string): Embedder {
+    if (!this.embedder) {
+      throw new Error(
+        `${feature} needs an embedder; construct Cognis with { embedder }`,
+      );
+    }
+    return this.embedder;
   }
 
   /** Apply pending migrations. Safe to call on every startup. */
@@ -99,6 +242,362 @@ export class Cognis {
       ],
     );
     return { annotationId: id };
+  }
+
+  // -- Chunking, embedding, novelty (M1) -----------------------------------
+
+  /** Chunk and embed a document version. Idempotent; re-running replaces. */
+  async chunkAndEmbed(
+    documentVersionId: Ulid,
+    opts: ChunkOptions = {},
+  ): Promise<ChunkAndEmbedResult> {
+    return chunkAndEmbed(
+      this.db, this.clock, this.#requireEmbedder('chunkAndEmbed'),
+      documentVersionId, opts,
+    );
+  }
+
+  /**
+   * Chunk, embed, and record novelty in one step — the share-time path.
+   *
+   * Novelty is computed before this document's own vectors could match
+   * themselves, so the score answers "is this new to me?" rather than "is this
+   * identical to itself?".
+   */
+  async indexDocument(args: {
+    documentVersionId: Ulid;
+    ingestionEventId: Ulid;
+    chunkOptions?: ChunkOptions;
+  }): Promise<{ indexed: ChunkAndEmbedResult; novelty: NoveltyResult; noveltyRecorded: boolean }> {
+    const embedder = this.#requireEmbedder('indexDocument');
+    const indexed = await this.chunkAndEmbed(
+      args.documentVersionId, args.chunkOptions ?? {},
+    );
+    const novelty = await computeNovelty(this.db, embedder, args.documentVersionId);
+    const { recorded } = await recordNovelty(this.db, args.ingestionEventId, novelty);
+    return { indexed, novelty, noveltyRecorded: recorded };
+  }
+
+  async computeNovelty(documentVersionId: Ulid): Promise<NoveltyResult> {
+    return computeNovelty(this.db, this.#requireEmbedder('computeNovelty'), documentVersionId);
+  }
+
+  /** Re-embed the whole corpus. A scoped rebuild, not a migration. */
+  async reembedAll(opts: ChunkOptions = {}): Promise<ReembedReport> {
+    return reembedAll(this.db, this.clock, this.#requireEmbedder('reembedAll'), opts);
+  }
+
+  // -- Concepts and coverage (M2) ------------------------------------------
+
+  /** Link one document version. Idempotent; re-running is a scoped rebuild. */
+  async linkDocument(documentVersionId: Ulid, opts: LinkOptions = {}): Promise<LinkReport> {
+    const { vocabulary, linker } = this.#requireLinking('linkDocument');
+    return linkDocument(this.db, this.clock, vocabulary, linker, documentVersionId, opts);
+  }
+
+  /** Relink the whole corpus. Concept ids do not move; evidence is recomputed. */
+  async linkAll(opts: LinkOptions = {}): Promise<LinkReport[]> {
+    const { vocabulary, linker } = this.#requireLinking('linkAll');
+    return linkAll(this.db, this.clock, vocabulary, linker, opts);
+  }
+
+  /** Pull vocabulary hierarchy edges for concepts already in the corpus. */
+  async importHierarchy(): Promise<{ edges: number; ancestorsAdded: number }> {
+    const { vocabulary } = this.#requireLinking('importHierarchy');
+    return importHierarchy(this.db, this.clock, vocabulary);
+  }
+
+  /** Recompute the coverage rollup from mentions and attested rows. */
+  async rollupCoverage(): Promise<{ concepts: number }> {
+    return rollupCoverage(this.db, this.clock);
+  }
+
+  async coverageFor(conceptId: string): Promise<CoverageRow | null> {
+    return coverageFor(this.db, conceptId);
+  }
+
+  /**
+   * Concepts met from several sources but never covered directly — the
+   * flagship query, and the first question in the success test.
+   */
+  async uncoveredButRecurring(opts: UncoveredOptions = {}): Promise<ConceptGap[]> {
+    return uncoveredButRecurring(this.db, opts);
+  }
+
+  async taxonomy(
+    opts: { rootConceptId?: string | null; includeUncovered?: boolean } = {},
+  ): Promise<TaxonomyNode[]> {
+    return taxonomy(this.db, opts);
+  }
+
+  async staleCoverage(opts: { before: string; limit?: number }): Promise<ConceptGap[]> {
+    return staleCoverage(this.db, opts);
+  }
+
+  /** Propose local-concept merges. Only high-confidence ones auto-apply. */
+  async proposeMerges(opts: ConsolidateOptions = {}): Promise<MergeProposal[]> {
+    return proposeMerges(this.db, this.#requireEmbedder('proposeMerges'), opts);
+  }
+
+  /** Record a user correction. Attested, and re-applied after every rebuild. */
+  async assert(a: {
+    kind: 'quality' | 'not_interested' | 'concept_merge' | 'concept_split'
+      | 'mention_reject' | 'mention_add' | 'known_already';
+    subjectType: 'source' | 'concept' | 'mention';
+    subjectId: string;
+    objectId?: string | null;
+    value?: number | null;
+    note?: string | null;
+  }): Promise<{ assertionId: Ulid }> {
+    const id = ulid(this.clock.nowMs());
+    await this.db.run(
+      `INSERT INTO user_assertion
+         (id, kind, subject_type, subject_id, object_id, value, note, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id, a.kind, a.subjectType, a.subjectId, a.objectId ?? null,
+        a.value ?? null, a.note ?? null, this.clock.now(),
+      ],
+    );
+    return { assertionId: id };
+  }
+
+  // -- Retention (M3) ------------------------------------------------------
+
+  /** Generate items for covered concepts that have none. */
+  async generateItems(opts: GenerateItemsOptions = {}): Promise<GenerateItemsReport> {
+    return generateItems(this.db, this.clock, this.#requireItemWriter('generateItems'), opts);
+  }
+
+  async generateItemsForConcept(
+    conceptId: string,
+    opts: GenerateItemsOptions = {},
+  ): Promise<{ generated: number; rejected: { reason: string }[] }> {
+    return generateItemsForConcept(
+      this.db, this.clock, this.#requireItemWriter('generateItemsForConcept'),
+      conceptId, opts,
+    );
+  }
+
+  async retireItem(itemId: Ulid, reason: string): Promise<void> {
+    return retireItem(this.db, this.clock, itemId, reason);
+  }
+
+  /** Assemble a review session: budgeted, interleaved, schedule-respecting. */
+  async dueItems(opts: SessionOptions = {}): Promise<ReviewCard[]> {
+    return dueItems(this.db, this.clock, this.scheduler, opts);
+  }
+
+  async submitReview(input: SubmitReviewInput): Promise<ReviewResult> {
+    return submitReview(
+      this.db, this.clock, this.scheduler, this.#requireGrader('submitReview'), input,
+    );
+  }
+
+  /** The user disagreeing with the grader is signal, and changes the schedule. */
+  async overrideGrade(reviewId: Ulid, rating: ReviewRating): Promise<{ nextDueAt: string }> {
+    return overrideGrade(this.db, this.scheduler, reviewId, rating);
+  }
+
+  /** When the next review falls due — the input to notification scheduling. */
+  async nextDueAt(): Promise<string | null> {
+    return nextDueAt(this.db);
+  }
+
+  async dueCountOn(day: string): Promise<number> {
+    return dueCountOn(this.db, day);
+  }
+
+  /**
+   * Retention evidence for a concept.
+   *
+   * When `evidenceSufficient` is false, `modelledRecall` is null and there is
+   * nothing for a client to render a score from. The honest-presentation rule
+   * lives in the type rather than in a style guide.
+   */
+  async retentionEvidence(conceptId: string): Promise<RetentionEvidence> {
+    return retentionEvidence(this.db, this.clock, this.scheduler, conceptId);
+  }
+
+  /** How the model's predictions have actually performed. */
+  async calibration(opts: { bins?: number } = {}): Promise<CalibrationReport> {
+    return calibration(this.db, this.clock, opts);
+  }
+
+  async anomalousItems(opts: { minReviews?: number } = {}) {
+    return anomalousItems(this.db, opts);
+  }
+
+  /** Recompute memory state from the review log. A rebuild, not a migration. */
+  async rebuildMemoryStates(): Promise<{ items: number; reviewsReplayed: number }> {
+    return rebuildMemoryStates(this.db, this.clock, this.scheduler);
+  }
+
+  // -- Suggestions (M4) ----------------------------------------------------
+
+  /** Fetch reference lists for corpus sources with DOIs. No model calls. */
+  async ingestCitations(opts: { limit?: number } = {}): Promise<CitationIngestReport> {
+    if (!this.scholarGraph) {
+      throw new Error('ingestCitations needs a scholarGraph; construct Cognis with one');
+    }
+    return ingestCitations(this.db, this.clock, this.scholarGraph, opts);
+  }
+
+  /** Works several corpus sources cite that the user has never opened. */
+  async convergentReferences(
+    opts: { minCiting?: number; limit?: number } = {},
+  ): Promise<ConvergentReference[]> {
+    return convergentReferences(this.db, opts);
+  }
+
+  /** Recompute concept co-occurrence, the input to clustering and bridges. */
+  async buildCooccurrence(opts: { minShared?: number } = {}): Promise<{ edges: number }> {
+    return buildCooccurrence(this.db, opts);
+  }
+
+  async conceptClusters(opts: { minSize?: number } = {}): Promise<ConceptCluster[]> {
+    return conceptClusters(this.db, opts);
+  }
+
+  async bridgeGaps(
+    opts: { minClusterSize?: number; limit?: number } = {},
+  ): Promise<BridgeGap[]> {
+    return bridgeGaps(this.db, opts);
+  }
+
+  async taxonomyHoles(
+    opts: { minCoveredSources?: number; limit?: number } = {},
+  ): Promise<TaxonomyHole[]> {
+    return taxonomyHoles(this.db, opts);
+  }
+
+  /**
+   * Build a suggestion slate on the coverage frontier.
+   *
+   * Diversity cap and serendipity slot are enforced here, not left to the
+   * client, and the ranking carries no engagement term by design.
+   */
+  async generateSuggestions(opts: GenerateSuggestionsOptions = {}): Promise<Suggestion[]> {
+    // The embedder is passed through so the `neighbour` fallback can run when
+    // asked for; it stays unused unless structural signals come up short.
+    return generateSuggestions(this.db, this.clock, {
+      ...opts,
+      ...(opts.embedder || !this.embedder ? {} : { embedder: this.embedder }),
+    });
+  }
+
+  async suggestions(opts: { limit?: number } = {}): Promise<Suggestion[]> {
+    return activeSuggestions(this.db, this.clock, opts);
+  }
+
+  async dismissSuggestion(
+    id: string,
+    reason?: 'not_interested' | 'already_known' | 'not_now',
+  ): Promise<void> {
+    return dismissSuggestion(this.db, this.clock, id, reason);
+  }
+
+  // -- Reader telemetry and views (M5) -------------------------------------
+
+  /**
+   * Record a reading session.
+   *
+   * Plausibility is judged and stored rather than applied by dropping rows: a
+   * phone left open on an article produces a real session that is useless as
+   * evidence, and "did not happen" is not the same as "happened but is not
+   * trustworthy".
+   */
+  async recordTelemetry(t: RawTelemetry): Promise<RecordTelemetryResult> {
+    return recordTelemetry(this.db, t);
+  }
+
+  /** Bounded ego graph. There is no global graph view, by design. */
+  async neighbourhood(
+    conceptId: string,
+    opts: NeighbourhoodOptions = {},
+  ): Promise<Neighbourhood> {
+    return neighbourhood(this.db, conceptId, opts);
+  }
+
+  /**
+   * M5's falsification test: does telemetry-derived engagement actually
+   * improve scheduling? Counterfactual replay of the real review log with and
+   * without the engagement prior.
+   */
+  async evaluateEngagementPrior(
+    opts: Parameters<typeof evaluateEngagementPrior>[1] = {},
+  ): Promise<EngagementComparison> {
+    return evaluateEngagementPrior(this.db, opts);
+  }
+
+  // -- Sync (M6) -----------------------------------------------------------
+
+  /** Device identifier, minted on first use. */
+  async deviceId(): Promise<string> {
+    return deviceId(this.db, this.clock);
+  }
+
+  /**
+   * Create and store a sync keyset.
+   *
+   * The passphrase is used here and discarded; only the salt and KDF
+   * parameters are stored. There is no key escrow and no recovery path — see
+   * `recoveryWarning()`.
+   */
+  async initSync(): Promise<SyncKeyset> {
+    const keyset = newKeyset(this.keyDerivation);
+    await saveKeyset(this.db, this.clock, keyset);
+    return keyset;
+  }
+
+  async syncKeyset(): Promise<SyncKeyset | null> {
+    return loadKeyset(this.db);
+  }
+
+  /** Open the cipher for this corpus. Throws if the passphrase is wrong. */
+  async openCipher(passphrase: string): Promise<SyncCipher> {
+    const keyset = await loadKeyset(this.db);
+    if (!keyset) throw new Error('sync is not set up on this device; call initSync first');
+    return SyncCipher.open(keyset, this.keyDerivation, passphrase);
+  }
+
+  /** Push dirty attested rows to the relay as one encrypted batch. */
+  async push(cipher: SyncCipher): Promise<PushReport> {
+    return push(this.db, this.clock, this.#requireRelay('push'), cipher);
+  }
+
+  /** Pull and merge batches from other devices. */
+  async pull(cipher: SyncCipher, opts: { limit?: number } = {}): Promise<PullReport> {
+    return pull(this.db, this.clock, this.#requireRelay('pull'), cipher, opts);
+  }
+
+  async resetPullCursor(cursor: string | null): Promise<void> {
+    return resetPullCursor(this.db, cursor);
+  }
+
+  /** Rows waiting to be pushed. */
+  async pendingSyncRows(): Promise<number> {
+    const row = await this.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM sync_dirty');
+    return row?.n ?? 0;
+  }
+
+  /**
+   * The passphrase-loss warning, in the words the setup screen should use.
+   * Kept in core so it cannot be quietly softened in a design review.
+   */
+  recoveryWarning(): string {
+    return describeRecovery();
+  }
+
+  // -- Search --------------------------------------------------------------
+
+  async search(query: string, opts: SearchOptions = {}): Promise<SearchHit[]> {
+    return semanticSearch(this.db, this.#requireEmbedder('search'), query, opts);
+  }
+
+  /** Literal substring search. Works with no embedder and no vectors. */
+  async searchLiteral(query: string, opts: SearchOptions = {}): Promise<SearchHit[]> {
+    return literalSearch(this.db, query, opts);
   }
 
   // -- Reads ---------------------------------------------------------------

@@ -61,8 +61,8 @@ schema and in review.
 
 ## Status
 
-**M0 in progress** — the attested core is implemented and tested. See
-[11-roadmap.md](docs/11-roadmap.md) for what M0 covers and what comes next.
+**M0 complete, M1 complete** in core. See
+[11-roadmap.md](docs/11-roadmap.md) for what each milestone covers.
 
 | M0 item | State |
 |---|---|
@@ -74,6 +74,74 @@ schema and in review.
 | Extraction *implementation* (Readability, PDF text layer) | client-side, not started |
 | Encryption at rest | not started |
 | Minimal list UI | client-side, not started |
+
+| M1 item | State |
+|---|---|
+| Chunking with section paths | done |
+| Embedding behind an injected port; `model_id` per vector | done |
+| Novelty at ingest and the prior-coverage card | done |
+| Semantic and literal search | done |
+| Re-embed as a scoped rebuild | done |
+| ONNX embedder | device-side, not started |
+| `sqlite-vec` ANN index | device-side; portable brute-force scan in place |
+
+| M2 item | State |
+|---|---|
+| Candidate spotting (proper nouns, acronyms, definitions, n-grams) | done |
+| Vocabulary candidate generation behind a port | done |
+| Disambiguation behind a port, with `is_primary` | done |
+| Local concepts and consolidation proposals | done |
+| User merge / split / reject, re-applied after every rebuild | done |
+| Coverage rollup and `uncoveredButRecurring` | done |
+| Taxonomy tree from vocabulary hierarchy | done |
+| Linking eval harness (precision, recall, NIL, identity stability) | done |
+| **≥200-mention labelled eval set** | **seed set only — see [eval/README.md](eval/README.md)** |
+| Wikidata client; model-backed linker | client/backend-side, not started |
+
+| M3 item | State |
+|---|---|
+| Item generation with evidence spans and a groundedness gate | done |
+| Grading with rubric points; raw answers stored verbatim | done |
+| FSRS scheduler, pinned and versioned; predictions stored per review | done |
+| Daily-budget session assembly with interleaving | done |
+| Calibration report, with excluded reviews disclosed | done |
+| Honest presentation enforced via `evidenceSufficient` | done |
+| Memory state rebuildable by replaying the review log | done |
+| Notification *delivery* (APNs/FCM) | client/backend-side; core computes due times |
+| Model-backed item writer and grader | backend-side, not started |
+
+| M4 item | State |
+|---|---|
+| Citation-graph ingest for DOI sources | done |
+| Convergent-reference detection | done |
+| Structural gaps: mentioned-never-primary, bridges, taxonomy holes | done |
+| Ranking with diversity cap and serendipity slot | done |
+| Structured reasons, rendered client-side | done |
+| Embedding neighbours as last-resort fallback | done |
+| Expiry, dismissal, nothing auto-ingested | done |
+| Crossref / OpenAlex client | backend-side, not started |
+
+| M5 item | State |
+|---|---|
+| Telemetry ingestion with plausibility guards | done |
+| Telemetry-derived engagement levels | done |
+| Engagement prior feeding the scheduler (a **hypothesis**) | done |
+| Counterfactual harness for the falsification test | done |
+| `synthesis` item type, gated on two or more sources | done |
+| Neighbourhood (ego) graph view | done |
+| In-app reader / WebView | client-side, not started |
+| **The falsification result itself** | **needs real telemetry — see below** |
+
+| M6 item | State |
+|---|---|
+| End-to-end encrypted sync (AES-256-GCM) | done |
+| Trigger-based change tracking for attested rows | done |
+| Order-independent merge rules; convergence tested | done |
+| Deterministic source identity ([ADR-0009](docs/adr/0009-deterministic-source-identity.md)) | done |
+| Derived data recomputed, never synced | done |
+| Passphrase-loss warning, stated plainly | done |
+| Argon2id key derivation | **portable fallback is PBKDF2 — see [docs/09](docs/09-privacy-and-security.md)** |
+| Relay service; key enrolment UX | client/backend-side, not started |
 
 Extraction and the UI are client concerns: core defines the ports and owns the
 state machine, and the client supplies the WebView extractor. See
@@ -87,8 +155,9 @@ npm run check      # typecheck + build + test
 ```
 
 Requires Node ≥ 22.5 (the tests use the built-in `node:sqlite` and
-`node:test`). The core package itself has **zero runtime dependencies** —
-deliberate, since it must also run inside a mobile JS runtime.
+`node:test`). The core package has exactly one runtime dependency, `ts-fsrs`,
+pinned per [ADR-0006](docs/adr/0006-fsrs-scheduling.md) — reproducing years of
+spaced-repetition parameter fitting badly is not a saving.
 
 ```
 src/
@@ -99,9 +168,49 @@ src/
   db/               schema migrations and the forward-only runner
   canonical/        URL, DOI and content-hash normalisation
   capture/          the attested write path, prior coverage, deletion
+  chunk/            structural chunking with heading breadcrumbs
+  embed/            vector storage, the embed pipeline, novelty
+  concept/          spotting, linking, overrides, consolidation
+  coverage/         the rollup and the gap queries
+  eval/             the linking evaluation harness
+  retention/        scheduling, items, grading, calibration, evidence
+  suggest/          citation graph, structural gaps, ranking
+  reader/           telemetry guards, engagement derivation, the prior
+  graph/            bounded neighbourhood queries
+  sync/             E2E crypto, change tracking, merge rules
+  search/           semantic and literal search
   export/           JSONL export/import and the table manifest
   core.ts           the facade from docs/10-api-contract.md
 ```
+
+## Three things to fix before this is used for real
+
+1. **Key derivation is PBKDF2, not Argon2id.** It is the strongest KDF Web
+   Crypto offers, it is behind a port, and the deviation is documented — but
+   it is a deviation from what [docs/09](docs/09-privacy-and-security.md)
+   specifies, and it is the only thing protecting a synced corpus.
+2. **Encryption at rest** on the device is still not wired up (open since M0).
+3. The two measurements below.
+
+## Two open measurements
+
+Both are built and neither has been run against real data. They are the two
+places where this project could still turn out to be wrong, so they are listed
+here rather than buried:
+
+1. **Linker precision** (M2). The harness is `src/eval/linking.ts`; the
+   labelled set it needs does not exist. See [eval/README.md](eval/README.md).
+   Everything downstream inherits linking quality — coverage numbers, quiz
+   targets, suggestion gaps.
+2. **Whether reading telemetry helps** (M5). The harness is
+   `src/eval/engagement.ts` and runs a counterfactual replay of the review log
+   with and without the engagement prior. The prior's multipliers are a
+   starting guess, not an established result. If real data says it does not
+   improve calibration, the honest response is to neutralise it and shrink the
+   reader's scope — which ADR-0007 already anticipates.
+
+Running either against simulated data produces a number that reflects the
+simulation, not reality. Both harnesses say so.
 
 Start with [00-vision-and-scope.md](docs/00-vision-and-scope.md), then
 [11-roadmap.md](docs/11-roadmap.md).

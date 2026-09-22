@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Cognis } from '../src/core.js';
 import { NodeSqliteDriver } from '../src/adapters/node-sqlite.js';
 import { FakeClock } from '../src/ports/clock.js';
-import { appliedMigrations } from '../src/db/migrate.js';
+import { appliedMigrations, MIGRATIONS } from '../src/db/migrate.js';
 
 test('migrations apply once and are idempotent across restarts', async () => {
   const cognis = new Cognis({
@@ -11,15 +11,16 @@ test('migrations apply once and are idempotent across restarts', async () => {
     clock: new FakeClock('2026-01-01T00:00:00.000Z'),
   });
 
+  const expected = MIGRATIONS.map((m) => m.id);
   const first = await cognis.migrate();
-  assert.deepEqual(first.applied, ['001_initial']);
+  assert.deepEqual(first.applied, expected);
 
   // A device that opens the app twice must not re-run migrations.
   const second = await cognis.migrate();
   assert.deepEqual(second.applied, []);
-  assert.deepEqual(second.alreadyApplied, ['001_initial']);
+  assert.deepEqual(second.alreadyApplied, expected);
 
-  assert.deepEqual(await appliedMigrations(cognis.db), ['001_initial']);
+  assert.deepEqual(await appliedMigrations(cognis.db), [...expected].sort());
   await cognis.close();
 });
 
