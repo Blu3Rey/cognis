@@ -63,6 +63,57 @@ cognis reindex --all
 `cognis doctor` also reports this, and `cognis stats` shows the vector count
 per model.
 
+## Concept linking
+
+`cognis link` resolves surface forms to Wikidata concepts using Claude, then
+rolls up coverage. **This is the first command that spends money**, so:
+
+```bash
+# See what it would do, send nothing, spend nothing
+cognis link --dry-run
+
+# Then, when you're ready
+cognis link
+```
+
+It reports token usage and an estimated cost after every run, and refuses to
+send a private source anywhere.
+
+Credentials come from `ANTHROPIC_API_KEY`, or from an `ant auth login` profile.
+
+Three things the adapter is deliberate about:
+
+- **It cannot invent an identifier.** Any concept id the model returns that was
+  not in the candidate list is discarded. A hallucinated QID would enter the
+  graph as a real node and be nearly impossible to spot later.
+- **A refusal degrades to NIL.** A corpus is arbitrary web text, and one chunk
+  tripping a classifier must not abort a document. Server-side fallbacks are on
+  by default; a refusal that survives them links that chunk as NIL.
+- **The prompt caches.** Instructions and the output contract are byte-identical
+  on every call and carry the cache breakpoint; the passage and its candidates
+  come after it. Linking is the dominant recurring cost.
+
+### The number you should not trust yet
+
+`cognis link` prints a warning, and it means it: **the linker's precision has
+never been measured.** Coverage counts, `gaps`, quiz targets and suggestions
+all inherit linking quality, and `docs/12` §2 makes precision the gate for
+building on any of it.
+
+The harness exists (`runLinkingEval` in core). The labelled set does not — see
+[eval/README.md](../../eval/README.md). That is step 4, and it is the most
+valuable thing left to do.
+
+### Batching
+
+`docs/08` leans on the Batches API for a 50% discount, and this adapter does
+not use it. Batching needs a core-level change: the `Linker` port is
+request/response and the pipeline calls it per chunk, so batch submission would
+mean collecting every request first, submitting, and resolving afterwards.
+Worth doing before linking a large corpus; not worth guessing at before the
+precision gate is passed. Note also that `fallbacks` is rejected on the Batches
+API, so a batch path has to handle refusals itself.
+
 ## Commands
 
 | | |
@@ -78,6 +129,9 @@ per model.
 | `privacy log` | Everything that has left this device |
 | `privacy set <id> --private\|--public` | Exclude a source from egress |
 | `privacy check <url>` | How a URL would be classified |
+| `link [--all] [--dry-run]` | Resolve concepts, roll up coverage |
+| `concepts [--limit N]` | What the corpus is about |
+| `gaps [--min-sources N]` | Met from several sources, never covered directly |
 | `export <path>` / `import <path>` | Full JSONL round-trip |
 
 Every read command takes `--json`.
@@ -105,7 +159,11 @@ PDFs are not implemented yet.
 | Extraction | **Verified end to end**, including against consent walls, JS shells and chrome-heavy pages |
 | Fetching, capture, novelty, search, privacy, export | **Verified end to end** through the real binary against a real HTTP server and real SQLite |
 | Embedder plumbing — batching, dimension checks, ordering, errors | **Verified** against an injected pipeline |
-| **The real model actually loading** | **Not verified.** `huggingface.co` is blocked in the environment this was built in, at the CONNECT level. Run `cognis doctor` on a machine with access — it loads the model and embeds a probe string. |
+| Wikidata client — URL construction, parsing, hierarchy walk, caching, politeness | **Verified** against recorded API payloads |
+| Claude linker — id validation, refusal handling, cache placement, offsets, cost | **Verified** against a stub client |
+| **The real embedding model loading** | **Not verified.** `huggingface.co` is blocked at the CONNECT level in the environment this was built in. `cognis doctor` checks it on a machine with access. |
+| **The real Wikidata API** | **Not verified.** `wikidata.org` is blocked in the same environment. |
+| **The real Claude API accepting this request shape** | **Not verified.** No API key here. `cognis link --dry-run` costs nothing; the first real `cognis link` is the test. |
 
 That last row is the honest gap. The code is written and its surroundings are
 tested; the weights have never been downloaded by this code.
