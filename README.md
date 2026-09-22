@@ -61,6 +61,47 @@ schema and in review.
 
 ## Status
 
-Design phase. No implementation yet. Start with
-[00-vision-and-scope.md](docs/00-vision-and-scope.md), then
+**M0 in progress** — the attested core is implemented and tested. See
+[11-roadmap.md](docs/11-roadmap.md) for what M0 covers and what comes next.
+
+| M0 item | State |
+|---|---|
+| Schema, migrations, core package, injected ports | done |
+| Capture → `source` + `ingestion_event` | done |
+| URL canonicalisation, DOI resolution, dedup | done |
+| Export (JSONL) and verified deletion | done |
+| Extraction *storage* path and failure recording | done |
+| Extraction *implementation* (Readability, PDF text layer) | client-side, not started |
+| Encryption at rest | not started |
+| Minimal list UI | client-side, not started |
+
+Extraction and the UI are client concerns: core defines the ports and owns the
+state machine, and the client supplies the WebView extractor. See
+[ADR-0003](docs/adr/0003-stack-selection.md).
+
+## Development
+
+```bash
+npm install
+npm run check      # typecheck + build + test
+```
+
+Requires Node ≥ 22.5 (the tests use the built-in `node:sqlite` and
+`node:test`). The core package itself has **zero runtime dependencies** —
+deliberate, since it must also run inside a mobile JS runtime.
+
+```
+src/
+  types.ts          domain types, attested/derived split
+  ids.ts            ULID
+  ports/            SqlDriver, Clock — injected, never imported concretely
+  adapters/         node:sqlite driver (dev/test; device uses a JSI binding)
+  db/               schema migrations and the forward-only runner
+  canonical/        URL, DOI and content-hash normalisation
+  capture/          the attested write path, prior coverage, deletion
+  export/           JSONL export/import and the table manifest
+  core.ts           the facade from docs/10-api-contract.md
+```
+
+Start with [00-vision-and-scope.md](docs/00-vision-and-scope.md), then
 [11-roadmap.md](docs/11-roadmap.md).
