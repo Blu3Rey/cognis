@@ -39,6 +39,22 @@ import { rollupCoverage, coverageFor } from './coverage/rollup.js';
 import type { CoverageRow } from './coverage/rollup.js';
 import { uncoveredButRecurring, taxonomy, staleCoverage } from './coverage/queries.js';
 import type { ConceptGap, UncoveredOptions, TaxonomyNode } from './coverage/queries.js';
+import type { ItemWriter } from './ports/item-writer.js';
+import type { Grader } from './ports/grader.js';
+import { Scheduler, rebuildMemoryStates } from './retention/scheduler.js';
+import type { SchedulerOptions, ReviewRating } from './retention/scheduler.js';
+import { generateItems, generateItemsForConcept, retireItem } from './retention/items.js';
+import type { GenerateItemsOptions, GenerateItemsReport } from './retention/items.js';
+import {
+  dueItems, submitReview, overrideGrade, nextDueAt, dueCountOn,
+} from './retention/session.js';
+import type {
+  ReviewCard, SessionOptions, SubmitReviewInput, ReviewResult,
+} from './retention/session.js';
+import {
+  retentionEvidence, calibration, anomalousItems,
+} from './retention/evidence.js';
+import type { RetentionEvidence, CalibrationReport } from './retention/evidence.js';
 import { toSource, toIngestionEvent } from './capture/rows.js';
 import type { SourceRow, IngestionEventRow } from './capture/rows.js';
 import type {
@@ -60,6 +76,12 @@ export interface CognisOptions {
   vocabulary?: VocabularyClient;
   /** Disambiguation. Required for concept linking. */
   linker?: Linker;
+  /** Quiz item generation. Required for M3 features. */
+  itemWriter?: ItemWriter;
+  /** Answer grading. Required to submit reviews. */
+  grader?: Grader;
+  /** Scheduler configuration. A default scheduler is always constructed. */
+  scheduler?: SchedulerOptions;
 }
 
 export class Cognis {
@@ -68,6 +90,9 @@ export class Cognis {
   readonly embedder: Embedder | null;
   readonly vocabulary: VocabularyClient | null;
   readonly linker: Linker | null;
+  readonly itemWriter: ItemWriter | null;
+  readonly grader: Grader | null;
+  readonly scheduler: Scheduler;
 
   constructor(opts: CognisOptions) {
     this.db = opts.db;
@@ -75,6 +100,23 @@ export class Cognis {
     this.embedder = opts.embedder ?? null;
     this.vocabulary = opts.vocabulary ?? null;
     this.linker = opts.linker ?? null;
+    this.itemWriter = opts.itemWriter ?? null;
+    this.grader = opts.grader ?? null;
+    this.scheduler = new Scheduler(opts.scheduler ?? {});
+  }
+
+  #requireItemWriter(feature: string): ItemWriter {
+    if (!this.itemWriter) {
+      throw new Error(`${feature} needs an itemWriter; construct Cognis with one`);
+    }
+    return this.itemWriter;
+  }
+
+  #requireGrader(feature: string): Grader {
+    if (!this.grader) {
+      throw new Error(`${feature} needs a grader; construct Cognis with one`);
+    }
+    return this.grader;
   }
 
   #requireLinking(feature: string): { vocabulary: VocabularyClient; linker: Linker } {
@@ -269,6 +311,77 @@ export class Cognis {
       ],
     );
     return { assertionId: id };
+  }
+
+  // -- Retention (M3) ------------------------------------------------------
+
+  /** Generate items for covered concepts that have none. */
+  async generateItems(opts: GenerateItemsOptions = {}): Promise<GenerateItemsReport> {
+    return generateItems(this.db, this.clock, this.#requireItemWriter('generateItems'), opts);
+  }
+
+  async generateItemsForConcept(
+    conceptId: string,
+    opts: GenerateItemsOptions = {},
+  ): Promise<{ generated: number; rejected: { reason: string }[] }> {
+    return generateItemsForConcept(
+      this.db, this.clock, this.#requireItemWriter('generateItemsForConcept'),
+      conceptId, opts,
+    );
+  }
+
+  async retireItem(itemId: Ulid, reason: string): Promise<void> {
+    return retireItem(this.db, this.clock, itemId, reason);
+  }
+
+  /** Assemble a review session: budgeted, interleaved, schedule-respecting. */
+  async dueItems(opts: SessionOptions = {}): Promise<ReviewCard[]> {
+    return dueItems(this.db, this.clock, this.scheduler, opts);
+  }
+
+  async submitReview(input: SubmitReviewInput): Promise<ReviewResult> {
+    return submitReview(
+      this.db, this.clock, this.scheduler, this.#requireGrader('submitReview'), input,
+    );
+  }
+
+  /** The user disagreeing with the grader is signal, and changes the schedule. */
+  async overrideGrade(reviewId: Ulid, rating: ReviewRating): Promise<{ nextDueAt: string }> {
+    return overrideGrade(this.db, this.scheduler, reviewId, rating);
+  }
+
+  /** When the next review falls due — the input to notification scheduling. */
+  async nextDueAt(): Promise<string | null> {
+    return nextDueAt(this.db);
+  }
+
+  async dueCountOn(day: string): Promise<number> {
+    return dueCountOn(this.db, day);
+  }
+
+  /**
+   * Retention evidence for a concept.
+   *
+   * When `evidenceSufficient` is false, `modelledRecall` is null and there is
+   * nothing for a client to render a score from. The honest-presentation rule
+   * lives in the type rather than in a style guide.
+   */
+  async retentionEvidence(conceptId: string): Promise<RetentionEvidence> {
+    return retentionEvidence(this.db, this.clock, this.scheduler, conceptId);
+  }
+
+  /** How the model's predictions have actually performed. */
+  async calibration(opts: { bins?: number } = {}): Promise<CalibrationReport> {
+    return calibration(this.db, this.clock, opts);
+  }
+
+  async anomalousItems(opts: { minReviews?: number } = {}) {
+    return anomalousItems(this.db, opts);
+  }
+
+  /** Recompute memory state from the review log. A rebuild, not a migration. */
+  async rebuildMemoryStates(): Promise<{ items: number; reviewsReplayed: number }> {
+    return rebuildMemoryStates(this.db, this.clock, this.scheduler);
   }
 
   // -- Search --------------------------------------------------------------

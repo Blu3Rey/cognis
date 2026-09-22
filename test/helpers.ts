@@ -4,6 +4,8 @@ import { FakeClock } from '../src/ports/clock.js';
 import { HashEmbedder } from '../src/adapters/hash-embedder.js';
 import { FixtureVocabulary } from '../src/adapters/fixture-vocabulary.js';
 import { RuleLinker } from '../src/adapters/rule-linker.js';
+import { TemplateItemWriter } from '../src/adapters/template-item-writer.js';
+import { KeywordGrader } from '../src/adapters/keyword-grader.js';
 import { VOCABULARY } from './fixtures/vocabulary.js';
 
 export async function freshCognis(start = '2026-01-01T00:00:00.000Z'): Promise<{
@@ -17,6 +19,8 @@ export async function freshCognis(start = '2026-01-01T00:00:00.000Z'): Promise<{
     embedder: new HashEmbedder(),
     vocabulary: new FixtureVocabulary(VOCABULARY),
     linker: new RuleLinker(),
+    itemWriter: new TemplateItemWriter(),
+    grader: new KeywordGrader(),
   });
   await cognis.migrate();
   return { cognis, clock };
@@ -51,4 +55,17 @@ export async function ingest(
     ingestionEventId: cap.ingestionEventId,
     documentVersionId: dv.documentVersionId,
   };
+}
+
+/** Capture, extract, index, link and roll up coverage in one step. */
+export async function ingestAndLink(
+  cognis: Cognis,
+  url: string,
+  text: string,
+  title: string,
+): Promise<{ sourceId: string; ingestionEventId: string; documentVersionId: string }> {
+  const res = await ingest(cognis, url, text, title);
+  await cognis.linkDocument(res.documentVersionId);
+  await cognis.rollupCoverage();
+  return res;
 }

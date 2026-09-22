@@ -133,6 +133,11 @@ Rules for any surface that displays retention:
 4. **Surface calibration.** Show, somewhere the user can find it, how the
    model's predictions have actually performed. A retention engine that cannot
    show its own reliability is asking for trust it has not earned.
+   Calibration also reports how many reviews it *excluded* — a first exposure
+   has no prior memory state, so the scheduler makes no claim and the review
+   cannot be scored. Those reviews are disclosed rather than dropped quietly:
+   a figure computed over an unstated subset of the data is the kind of quiet
+   omission that makes a number untrustworthy.
 5. **Name exposure as exposure.** Anything computed without retrieval outcomes
    is labelled exposure or last-contact, never retention. This distinction is
    enforced in the schema and must survive into the UI vocabulary.

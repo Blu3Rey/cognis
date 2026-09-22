@@ -98,6 +98,18 @@ schema and in review.
 | **≥200-mention labelled eval set** | **seed set only — see [eval/README.md](eval/README.md)** |
 | Wikidata client; model-backed linker | client/backend-side, not started |
 
+| M3 item | State |
+|---|---|
+| Item generation with evidence spans and a groundedness gate | done |
+| Grading with rubric points; raw answers stored verbatim | done |
+| FSRS scheduler, pinned and versioned; predictions stored per review | done |
+| Daily-budget session assembly with interleaving | done |
+| Calibration report, with excluded reviews disclosed | done |
+| Honest presentation enforced via `evidenceSufficient` | done |
+| Memory state rebuildable by replaying the review log | done |
+| Notification *delivery* (APNs/FCM) | client/backend-side; core computes due times |
+| Model-backed item writer and grader | backend-side, not started |
+
 Extraction and the UI are client concerns: core defines the ports and owns the
 state machine, and the client supplies the WebView extractor. See
 [ADR-0003](docs/adr/0003-stack-selection.md).
@@ -110,8 +122,9 @@ npm run check      # typecheck + build + test
 ```
 
 Requires Node ≥ 22.5 (the tests use the built-in `node:sqlite` and
-`node:test`). The core package itself has **zero runtime dependencies** —
-deliberate, since it must also run inside a mobile JS runtime.
+`node:test`). The core package has exactly one runtime dependency, `ts-fsrs`,
+pinned per [ADR-0006](docs/adr/0006-fsrs-scheduling.md) — reproducing years of
+spaced-repetition parameter fitting badly is not a saving.
 
 ```
 src/
@@ -127,6 +140,7 @@ src/
   concept/          spotting, linking, overrides, consolidation
   coverage/         the rollup and the gap queries
   eval/             the linking evaluation harness
+  retention/        scheduling, items, grading, calibration, evidence
   search/           semantic and literal search
   export/           JSONL export/import and the table manifest
   core.ts           the facade from docs/10-api-contract.md

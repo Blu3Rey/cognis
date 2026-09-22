@@ -137,6 +137,44 @@ export const TABLES: readonly TableSpec[] = [
     ],
   },
   {
+    name: 'review',
+    attested: true,
+    // The graded retrieval outcomes the entire retention model is fit on.
+    // Irreplaceable, and the reason memory_state can be derived.
+    exportable: true,
+    columns: [
+      'id', 'quiz_item_id', 'item_prompt_snapshot', 'concept_id', 'presented_at',
+      'answered_at', 'latency_ms', 'answer_text', 'self_rating', 'machine_grade',
+      'machine_rating', 'grade_rubric_version', 'grade_model_id',
+      'user_grade_override', 'scheduled_for', 'predicted_recall', 'interval_days',
+    ],
+  },
+  {
+    name: 'quiz_item',
+    attested: false,
+    // Exported despite being derived: reviews snapshot the prompt, but keeping
+    // the items means an imported corpus can carry on reviewing immediately
+    // rather than waiting on regeneration through a paid model call.
+    exportable: true,
+    columns: [
+      'id', 'concept_id', 'kind', 'prompt', 'expected_points_json',
+      'evidence_json', 'difficulty_hint', 'retired_at', 'retired_reason',
+      'producer_version', 'model_id', 'prompt_version', 'computed_at',
+    ],
+  },
+  {
+    name: 'memory_state',
+    attested: false,
+    // Recomputable by replaying the review log, which is what makes a
+    // scheduler upgrade or parameter refit safe.
+    exportable: false,
+    columns: [
+      'scope', 'scope_id', 'stability', 'difficulty', 'last_review_at',
+      'due_at', 'reps', 'lapses', 'state', 'card_json', 'scheduler',
+      'scheduler_version', 'params_hash',
+    ],
+  },
+  {
     name: 'user_assertion',
     attested: true,
     exportable: true,

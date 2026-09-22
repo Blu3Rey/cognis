@@ -72,6 +72,44 @@ export type { CoverageRow } from './coverage/rollup.js';
 export { uncoveredButRecurring, taxonomy, staleCoverage } from './coverage/queries.js';
 export type { ConceptGap, UncoveredOptions, TaxonomyNode } from './coverage/queries.js';
 
+export type {
+  ItemWriter, ItemGenerationRequest, GeneratedItem, RubricPoint, EvidenceSpan,
+} from './ports/item-writer.js';
+export type { Grader, GradeRequest, GradeResult } from './ports/grader.js';
+export { TemplateItemWriter } from './adapters/template-item-writer.js';
+export type { TemplateItemWriterOptions } from './adapters/template-item-writer.js';
+export { KeywordGrader } from './adapters/keyword-grader.js';
+export type { KeywordGraderOptions } from './adapters/keyword-grader.js';
+
+export {
+  Scheduler, scoreToRating, paramsHash, rebuildMemoryStates, loadMemoryState,
+  saveMemoryState, SCHEDULER_NAME, SCHEDULER_VERSION, DEFAULT_THRESHOLDS,
+  RATING_AGAIN, RATING_HARD, RATING_GOOD, RATING_EASY,
+} from './retention/scheduler.js';
+export type {
+  ReviewRating, RatingThresholds, SchedulerOptions, MemoryStateRow,
+} from './retention/scheduler.js';
+export {
+  generateItems, generateItemsForConcept, retireItem, validateGroundedness,
+  evidenceFor, ITEM_PIPELINE_VERSION,
+} from './retention/items.js';
+export type {
+  GenerateItemsOptions, GenerateItemsReport, GroundednessResult,
+} from './retention/items.js';
+export {
+  dueItems, submitReview, overrideGrade, nextDueAt, dueCountOn,
+} from './retention/session.js';
+export type {
+  ReviewCard, SessionOptions, SubmitReviewInput, ReviewResult,
+} from './retention/session.js';
+export {
+  retentionEvidence, calibration, anomalousItems,
+  MIN_REVIEWS_FOR_ESTIMATE, DURABILITY_INTERVAL_DAYS,
+} from './retention/evidence.js';
+export type {
+  RetentionEvidence, CalibrationReport, CalibrationBin,
+} from './retention/evidence.js';
+
 export { runLinkingEval, identityStability, formatReport } from './eval/linking.js';
 export type {
   GoldMention, GoldDocument, LinkingMetrics, LinkingEvalReport,
