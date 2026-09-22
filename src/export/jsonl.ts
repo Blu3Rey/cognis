@@ -62,9 +62,10 @@ export async function* exportJsonl(
   for (const spec of EXPORT_ORDER) {
     const cols = spec.columns.join(', ');
     // Ordered by primary key so two exports of the same database are
-    // byte-identical, which makes the export diffable and testable.
+    // byte-identical, which makes the export diffable and testable. Not every
+    // table is keyed by `id` — the citation graph is keyed by DOI.
     const rows = await db.all<Record<string, SqlValue>>(
-      `SELECT ${cols} FROM ${spec.name} ORDER BY id`,
+      `SELECT ${cols} FROM ${spec.name} ORDER BY ${spec.orderBy ?? 'id'}`,
     );
     for (const r of rows) {
       const line: ExportRow = { t: spec.name, r };

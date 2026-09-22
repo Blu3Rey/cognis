@@ -55,6 +55,17 @@ import {
   retentionEvidence, calibration, anomalousItems,
 } from './retention/evidence.js';
 import type { RetentionEvidence, CalibrationReport } from './retention/evidence.js';
+import type { ScholarGraph } from './ports/scholar-graph.js';
+import { ingestCitations, convergentReferences } from './suggest/citations.js';
+import type { CitationIngestReport, ConvergentReference } from './suggest/citations.js';
+import {
+  buildCooccurrence, conceptClusters, bridgeGaps, taxonomyHoles,
+} from './suggest/structural.js';
+import type { ConceptCluster, BridgeGap, TaxonomyHole } from './suggest/structural.js';
+import {
+  generateSuggestions, activeSuggestions, dismissSuggestion,
+} from './suggest/rank.js';
+import type { Suggestion, GenerateSuggestionsOptions } from './suggest/rank.js';
 import { toSource, toIngestionEvent } from './capture/rows.js';
 import type { SourceRow, IngestionEventRow } from './capture/rows.js';
 import type {
@@ -82,6 +93,8 @@ export interface CognisOptions {
   grader?: Grader;
   /** Scheduler configuration. A default scheduler is always constructed. */
   scheduler?: SchedulerOptions;
+  /** Citation graph access. Required to ingest citations. */
+  scholarGraph?: ScholarGraph;
 }
 
 export class Cognis {
@@ -93,6 +106,7 @@ export class Cognis {
   readonly itemWriter: ItemWriter | null;
   readonly grader: Grader | null;
   readonly scheduler: Scheduler;
+  readonly scholarGraph: ScholarGraph | null;
 
   constructor(opts: CognisOptions) {
     this.db = opts.db;
@@ -103,6 +117,7 @@ export class Cognis {
     this.itemWriter = opts.itemWriter ?? null;
     this.grader = opts.grader ?? null;
     this.scheduler = new Scheduler(opts.scheduler ?? {});
+    this.scholarGraph = opts.scholarGraph ?? null;
   }
 
   #requireItemWriter(feature: string): ItemWriter {
@@ -382,6 +397,70 @@ export class Cognis {
   /** Recompute memory state from the review log. A rebuild, not a migration. */
   async rebuildMemoryStates(): Promise<{ items: number; reviewsReplayed: number }> {
     return rebuildMemoryStates(this.db, this.clock, this.scheduler);
+  }
+
+  // -- Suggestions (M4) ----------------------------------------------------
+
+  /** Fetch reference lists for corpus sources with DOIs. No model calls. */
+  async ingestCitations(opts: { limit?: number } = {}): Promise<CitationIngestReport> {
+    if (!this.scholarGraph) {
+      throw new Error('ingestCitations needs a scholarGraph; construct Cognis with one');
+    }
+    return ingestCitations(this.db, this.clock, this.scholarGraph, opts);
+  }
+
+  /** Works several corpus sources cite that the user has never opened. */
+  async convergentReferences(
+    opts: { minCiting?: number; limit?: number } = {},
+  ): Promise<ConvergentReference[]> {
+    return convergentReferences(this.db, opts);
+  }
+
+  /** Recompute concept co-occurrence, the input to clustering and bridges. */
+  async buildCooccurrence(opts: { minShared?: number } = {}): Promise<{ edges: number }> {
+    return buildCooccurrence(this.db, opts);
+  }
+
+  async conceptClusters(opts: { minSize?: number } = {}): Promise<ConceptCluster[]> {
+    return conceptClusters(this.db, opts);
+  }
+
+  async bridgeGaps(
+    opts: { minClusterSize?: number; limit?: number } = {},
+  ): Promise<BridgeGap[]> {
+    return bridgeGaps(this.db, opts);
+  }
+
+  async taxonomyHoles(
+    opts: { minCoveredSources?: number; limit?: number } = {},
+  ): Promise<TaxonomyHole[]> {
+    return taxonomyHoles(this.db, opts);
+  }
+
+  /**
+   * Build a suggestion slate on the coverage frontier.
+   *
+   * Diversity cap and serendipity slot are enforced here, not left to the
+   * client, and the ranking carries no engagement term by design.
+   */
+  async generateSuggestions(opts: GenerateSuggestionsOptions = {}): Promise<Suggestion[]> {
+    // The embedder is passed through so the `neighbour` fallback can run when
+    // asked for; it stays unused unless structural signals come up short.
+    return generateSuggestions(this.db, this.clock, {
+      ...opts,
+      ...(opts.embedder || !this.embedder ? {} : { embedder: this.embedder }),
+    });
+  }
+
+  async suggestions(opts: { limit?: number } = {}): Promise<Suggestion[]> {
+    return activeSuggestions(this.db, this.clock, opts);
+  }
+
+  async dismissSuggestion(
+    id: string,
+    reason?: 'not_interested' | 'already_known' | 'not_now',
+  ): Promise<void> {
+    return dismissSuggestion(this.db, this.clock, id, reason);
   }
 
   // -- Search --------------------------------------------------------------

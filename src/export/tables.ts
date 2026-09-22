@@ -24,6 +24,14 @@ export interface TableSpec {
    * regenerate offline in seconds. So they are omitted and rebuilt on import.
    */
   exportable: boolean;
+  /**
+   * Column(s) to sort by on export. Defaults to `id`.
+   *
+   * Two exports of the same database must be byte-identical, which needs a
+   * deterministic order — and not every table is keyed by `id`: the citation
+   * graph is keyed by DOI.
+   */
+  orderBy?: string;
 }
 
 export const TABLES: readonly TableSpec[] = [
@@ -70,12 +78,14 @@ export const TABLES: readonly TableSpec[] = [
     name: 'embedding_meta',
     attested: false,
     exportable: false,
+    orderBy: 'chunk_id, model_id',
     columns: ['chunk_id', 'model_id', 'dim', 'computed_at'],
   },
   {
     name: 'embedding_vector',
     attested: false,
     exportable: false,
+    orderBy: 'chunk_id, model_id',
     columns: ['chunk_id', 'model_id', 'vector'],
   },
   {
@@ -112,6 +122,7 @@ export const TABLES: readonly TableSpec[] = [
     name: 'coverage',
     attested: false,
     exportable: false,
+    orderBy: 'concept_id',
     columns: [
       'concept_id', 'distinct_sources', 'primary_sources', 'first_contact_at',
       'last_contact_at', 'temporal_spread_days', 'max_engagement',
@@ -165,6 +176,7 @@ export const TABLES: readonly TableSpec[] = [
   {
     name: 'memory_state',
     attested: false,
+    orderBy: 'scope, scope_id',
     // Recomputable by replaying the review log, which is what makes a
     // scheduler upgrade or parameter refit safe.
     exportable: false,
@@ -181,6 +193,37 @@ export const TABLES: readonly TableSpec[] = [
     columns: [
       'id', 'kind', 'subject_type', 'subject_id', 'object_id', 'value', 'note',
       'created_at',
+    ],
+  },
+  {
+    name: 'work',
+    attested: false,
+    orderBy: 'doi',
+    // Refetchable from the metadata APIs, but exported anyway: it is small,
+    // and carrying it means an imported corpus can produce suggestions
+    // immediately rather than re-crawling a few hundred DOIs first.
+    exportable: true,
+    columns: [
+      'doi', 'title', 'authors_json', 'published_year', 'open_access',
+      'cited_by_count', 'source_id', 'fetched_at', 'producer_version',
+    ],
+  },
+  {
+    name: 'citation',
+    attested: false,
+    exportable: true,
+    orderBy: 'from_doi, to_doi',
+    columns: ['from_doi', 'to_doi', 'producer_version'],
+  },
+  {
+    name: 'suggestion',
+    attested: false,
+    // Ephemeral by design: a slate is a current report, not history. Only
+    // dismissals matter across devices, and those are user_assertion rows.
+    exportable: false,
+    columns: [
+      'id', 'kind', 'concept_id', 'external_ref', 'reason_json', 'score',
+      'generated_at', 'expires_at', 'dismissed_at', 'dismiss_reason',
     ],
   },
   {

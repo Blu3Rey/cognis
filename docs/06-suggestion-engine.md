@@ -115,6 +115,23 @@ These are product rules with teeth, not preferences:
 5. **The cluster cap is not tunable upward by engagement.** If an experiment
    shows that relaxing diversity raises usage, that is not a reason to relax it.
 
+## Slate composition in practice
+
+A slate is rebuilt on demand and replaces the previous one; only dismissals
+persist. Concretely:
+
+| Constraint | Implementation |
+|---|---|
+| Diversity cap | at most `floor(limit × 0.4)` items from the largest concept cluster, enforced during selection |
+| Serendipity slot | one item drawn from outside the top clusters, preferring a bridge or taxonomy hole over randomness |
+| Similarity as fallback | `neighbour` candidates are generated only when structural signals did not fill the slate, and carry a redundancy penalty equal to their similarity so they cannot outrank a citation or coverage gap |
+| Expiry | enforced on read; an expired slate simply disappears |
+| Dismissal | suppresses that target in every future slate |
+
+Clusters are connected components over the concept co-occurrence graph, which
+also means a bridge candidate is unbridged by construction rather than by
+threshold.
+
 ## Cost
 
 The citation-graph path is free of model calls: metadata APIs plus SQL. The

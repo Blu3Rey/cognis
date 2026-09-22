@@ -110,6 +110,17 @@ schema and in review.
 | Notification *delivery* (APNs/FCM) | client/backend-side; core computes due times |
 | Model-backed item writer and grader | backend-side, not started |
 
+| M4 item | State |
+|---|---|
+| Citation-graph ingest for DOI sources | done |
+| Convergent-reference detection | done |
+| Structural gaps: mentioned-never-primary, bridges, taxonomy holes | done |
+| Ranking with diversity cap and serendipity slot | done |
+| Structured reasons, rendered client-side | done |
+| Embedding neighbours as last-resort fallback | done |
+| Expiry, dismissal, nothing auto-ingested | done |
+| Crossref / OpenAlex client | backend-side, not started |
+
 Extraction and the UI are client concerns: core defines the ports and owns the
 state machine, and the client supplies the WebView extractor. See
 [ADR-0003](docs/adr/0003-stack-selection.md).
@@ -141,6 +152,7 @@ src/
   coverage/         the rollup and the gap queries
   eval/             the linking evaluation harness
   retention/        scheduling, items, grading, calibration, evidence
+  suggest/          citation graph, structural gaps, ranking
   search/           semantic and literal search
   export/           JSONL export/import and the table manifest
   core.ts           the facade from docs/10-api-contract.md

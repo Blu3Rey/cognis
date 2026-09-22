@@ -6,7 +6,9 @@ import { FixtureVocabulary } from '../src/adapters/fixture-vocabulary.js';
 import { RuleLinker } from '../src/adapters/rule-linker.js';
 import { TemplateItemWriter } from '../src/adapters/template-item-writer.js';
 import { KeywordGrader } from '../src/adapters/keyword-grader.js';
+import { FixtureScholarGraph } from '../src/adapters/fixture-scholar-graph.js';
 import { VOCABULARY } from './fixtures/vocabulary.js';
+import { WORKS } from './fixtures/scholar.js';
 
 export async function freshCognis(start = '2026-01-01T00:00:00.000Z'): Promise<{
   cognis: Cognis;
@@ -21,6 +23,7 @@ export async function freshCognis(start = '2026-01-01T00:00:00.000Z'): Promise<{
     linker: new RuleLinker(),
     itemWriter: new TemplateItemWriter(),
     grader: new KeywordGrader(),
+    scholarGraph: new FixtureScholarGraph(WORKS),
   });
   await cognis.migrate();
   return { cognis, clock };
@@ -68,4 +71,31 @@ export async function ingestAndLink(
   await cognis.linkDocument(res.documentVersionId);
   await cognis.rollupCoverage();
   return res;
+}
+
+/** Capture a paper by DOI, extract, index and link it. */
+export async function ingestPaper(
+  cognis: Cognis,
+  doi: string,
+  text: string,
+  title: string,
+): Promise<{ sourceId: string; documentVersionId: string }> {
+  const { textFingerprint } = await import('../src/canonical/hash.js');
+  const cap = await cognis.capture({
+    kind: 'doi', payload: doi, capturePath: 'share_sheet', title,
+  });
+  const dv = await cognis.recordExtraction({
+    sourceId: cap.sourceId,
+    ingestionEventId: cap.ingestionEventId,
+    text,
+    textHash: await textFingerprint(text),
+    producer: 'test-extractor',
+    producerVersion: '1.0.0',
+  });
+  await cognis.indexDocument({
+    documentVersionId: dv.documentVersionId,
+    ingestionEventId: cap.ingestionEventId,
+  });
+  await cognis.linkDocument(dv.documentVersionId);
+  return { sourceId: cap.sourceId, documentVersionId: dv.documentVersionId };
 }

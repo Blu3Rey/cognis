@@ -110,6 +110,29 @@ export type {
   RetentionEvidence, CalibrationReport, CalibrationBin,
 } from './retention/evidence.js';
 
+export type { ScholarGraph, WorkMetadata } from './ports/scholar-graph.js';
+export { FixtureScholarGraph } from './adapters/fixture-scholar-graph.js';
+export type { FixtureWork } from './adapters/fixture-scholar-graph.js';
+
+export {
+  ingestCitations, convergentReferences, CITATION_PIPELINE_VERSION,
+} from './suggest/citations.js';
+export type { CitationIngestReport, ConvergentReference } from './suggest/citations.js';
+export {
+  buildCooccurrence, conceptClusters, bridgeGaps, taxonomyHoles, STRUCTURAL_VERSION,
+} from './suggest/structural.js';
+export type { ConceptCluster, BridgeGap, TaxonomyHole } from './suggest/structural.js';
+export { neighbourCandidates } from './suggest/neighbours.js';
+export type { NeighbourCandidate } from './suggest/neighbours.js';
+export {
+  generateSuggestions, activeSuggestions, dismissSuggestion,
+  DEFAULT_WEIGHTS, RANKER_VERSION,
+} from './suggest/rank.js';
+export type {
+  Suggestion, SuggestionKind, SuggestionReason, RankWeights,
+  GenerateSuggestionsOptions,
+} from './suggest/rank.js';
+
 export { runLinkingEval, identityStability, formatReport } from './eval/linking.js';
 export type {
   GoldMention, GoldDocument, LinkingMetrics, LinkingEvalReport,

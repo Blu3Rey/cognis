@@ -13,6 +13,7 @@ import * as m001 from './migrations/001_initial.js';
 import * as m002 from './migrations/002_chunks_embeddings.js';
 import * as m003 from './migrations/003_concepts.js';
 import * as m004 from './migrations/004_retention.js';
+import * as m005 from './migrations/005_suggestions.js';
 
 export interface Migration {
   id: string;
@@ -25,6 +26,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { id: m002.id, up: m002.up },
   { id: m003.id, up: m003.up },
   { id: m004.id, up: m004.up },
+  { id: m005.id, up: m005.up },
 ];
 
 const MIGRATION_TABLE = `
