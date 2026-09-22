@@ -9,6 +9,7 @@
 import type { SqlDriver } from '../ports/sql.js';
 import type { Clock } from '../ports/clock.js';
 import type { ScholarGraph } from '../ports/scholar-graph.js';
+import { logEgress } from '../privacy/egress.js';
 
 export const CITATION_PIPELINE_VERSION = '1.0.0';
 
@@ -66,8 +67,12 @@ export async function ingestCitations(
   scholar: ScholarGraph,
   opts: { limit?: number } = {},
 ): Promise<CitationIngestReport> {
+  // A DOI is a small disclosure, but it is still a statement about what the
+  // user reads, so a private source's DOI does not leave either.
   const sources = await db.all<{ id: string; doi: string }>(
-    `SELECT id, doi FROM source WHERE doi IS NOT NULL ORDER BY id LIMIT ?`,
+    `SELECT id, doi FROM source AS s
+      WHERE doi IS NOT NULL AND COALESCE(s.is_private, 0) = 0
+      ORDER BY id LIMIT ?`,
     [opts.limit ?? 500],
   );
 
@@ -83,6 +88,15 @@ export async function ingestCitations(
     meta: Awaited<ReturnType<ScholarGraph['metadata']>>;
     refs: string[];
   }[] = [];
+
+  if (sources.length > 0) {
+    await logEgress(db, clock, {
+      destination: 'scholar_graph',
+      purpose: 'metadata',
+      sourceIds: sources.map((s) => s.id),
+      bytesSent: sources.reduce((n, s) => n + s.doi.length, 0),
+    });
+  }
 
   for (const s of sources) {
     try {

@@ -19,6 +19,7 @@ import { ulid } from '../ids.js';
 import { canonicaliseUrl } from '../canonical/url.js';
 import { normaliseDoi, arxivDoi, arxivIdFromUrl } from '../canonical/doi.js';
 import { sourceIdFor } from '../canonical/source-id.js';
+import { classifyUrl } from '../privacy/domains.js';
 import { toSource, toIngestionEvent } from './rows.js';
 import type { SourceRow, IngestionEventRow } from './rows.js';
 import type { PriorCoverage } from './prior-coverage.js';
@@ -50,6 +51,10 @@ export interface CaptureResult {
   /** True when this capture attached to an existing source. */
   reEncounter: boolean;
   priorCoverage: PriorCoverage;
+  /** True when the source is excluded from all egress. */
+  isPrivate: boolean;
+  /** Why it was auto-marked, when the classifier fired. */
+  privateReason: string | null;
 }
 
 function sourceKindFor(input: CaptureInput): SourceKind {
@@ -157,6 +162,17 @@ export async function capture(
   const identity0 = resolveIdentity(input);
   const occurredAt = input.occurredAt ?? clock.now();
 
+  // Private by default for anything that looks authenticated or transactional
+  // (docs/09 § rule 3). The caller can force it on but never off: a heuristic
+  // that a caller can override downward is not a default, it is a suggestion.
+  const classification = identity0.canonicalUrl
+    ? classifyUrl(identity0.canonicalUrl)
+    : { isPrivate: false, reason: null };
+  const isPrivate = input.isPrivate === true || classification.isPrivate;
+  const privateReason = input.isPrivate === true
+    ? 'marked private by the user at capture'
+    : classification.reason;
+
   return db.transaction(async () => {
     const existing = await findExisting(db, identity0, input.contentHash);
 
@@ -206,9 +222,15 @@ export async function capture(
           input.authors ? JSON.stringify(input.authors) : null,
           input.publishedAt ?? null,
           occurredAt,
-          input.isPrivate ? 1 : 0,
+          isPrivate ? 1 : 0,
         ],
       );
+    }
+
+    // A source already known and now classified private must be upgraded:
+    // privacy only ever ratchets in the protective direction.
+    if (existing && isPrivate && !existing.isPrivate) {
+      await db.run('UPDATE source SET is_private = 1 WHERE id = ?', [sourceId]);
     }
 
     const eventId = ulid(clock.nowMs());
@@ -221,7 +243,11 @@ export async function capture(
     );
 
     const priorCoverage = await priorCoverageFor(db, sourceId, eventId);
-    return { sourceId, ingestionEventId: eventId, reEncounter, priorCoverage };
+    return {
+      sourceId, ingestionEventId: eventId, reEncounter, priorCoverage,
+      isPrivate: isPrivate || (existing?.isPrivate ?? false),
+      privateReason,
+    };
   });
 }
 

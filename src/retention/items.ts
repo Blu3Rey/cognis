@@ -13,6 +13,9 @@ import type {
 } from '../ports/item-writer.js';
 import type { Ulid } from '../types.js';
 import { ulid } from '../ids.js';
+import { withEgress } from '../privacy/egress.js';
+import { redactText } from '../privacy/redact.js';
+import type { Redaction } from '../privacy/redact.js';
 
 export const ITEM_PIPELINE_VERSION = '1.0.0';
 
@@ -33,7 +36,12 @@ export interface GenerateItemsReport {
   rejections: { conceptId: string; reason: string }[];
 }
 
-/** Gather the spans that justify asking about a concept. */
+/**
+ * Gather the spans that justify asking about a concept.
+ *
+ * Private sources are excluded here rather than at the caller: evidence that
+ * is never gathered cannot be sent, whatever a future call site does.
+ */
 export async function evidenceFor(
   db: SqlDriver,
   conceptId: string,
@@ -50,6 +58,7 @@ export async function evidenceFor(
        JOIN document_version dv ON dv.id = c.document_version_id
        JOIN source s ON s.id = dv.source_id
       WHERE m.concept_id = ?
+        AND COALESCE(s.is_private, 0) = 0
       ORDER BY m.is_primary DESC, m.confidence DESC, c.id
       LIMIT ?`,
     [conceptId, limit],
@@ -140,13 +149,31 @@ export async function generateItemsForConcept(
     return { generated: 0, rejected: [{ reason: 'no evidence' }] };
   }
 
-  const items = await writer.generate({
+  const redactions: Redaction[] = [];
+  const safeEvidence = evidence.map((e) => {
+    const r = redactText(e.text);
+    redactions.push(...r.redactions);
+    return { ...e, text: r.value };
+  });
+  const request = {
     conceptId,
     conceptLabel: concept.label,
-    evidence,
+    evidence: safeEvidence,
     kinds,
     maxItems,
-  });
+  };
+
+  const items = await withEgress(
+    db, clock,
+    {
+      destination: 'model_proxy',
+      purpose: 'itemise',
+      sourceIds: [...new Set(evidence.map((e) => e.sourceId))],
+      bytesSent: JSON.stringify(request).length,
+      redactions,
+    },
+    () => writer.generate(request),
+  );
 
   const rejected: { reason: string }[] = [];
   let generated = 0;

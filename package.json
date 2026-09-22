@@ -22,7 +22,8 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test dist/test/**/*.test.js",
-    "check": "npm run typecheck && npm run test"
+    "check": "npm run typecheck && npm run test && npm run verify:manifest",
+    "verify:manifest": "node scripts/verify-manifest.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

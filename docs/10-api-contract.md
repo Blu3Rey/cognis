@@ -39,20 +39,34 @@ type PriorCoverage = {
 
 ```typescript
 recordEngagement(ingestionEventId: string, level: Engagement, source: EngagementSource): Promise<void>
-recordReadingSession(ingestionEventId: string, telemetry: ReadingTelemetry): Promise<void>
+recordTelemetry(t: RawTelemetry): Promise<RecordTelemetryResult>
 annotate(documentVersionId: string, a: AnnotationInput): Promise<{ annotationId: string }>
 ```
 
+`recordTelemetry` judges plausibility and returns its verdict rather than
+silently discarding a session that cannot be believed. See
+[03](03-ingestion.md) § Engagement depth.
+
 ## Pipeline control
 
+Stages are driven directly rather than through a job queue; the client decides
+when to run them, because only the client knows whether the device is charging
+and on unmetered network ([03](03-ingestion.md) § Scheduling and cost control).
+
 ```typescript
-enqueue(stage: Stage, scope: { sourceIds?: string[]; all?: boolean }): Promise<JobId>
-jobStatus(id: JobId): Promise<JobStatus>
-rebuild(stage: Stage, fromVersion: string): Promise<JobId>   // see docs/02 § Rebuild semantics
+indexDocument(args): Promise<{ indexed; novelty; noveltyRecorded }>   // chunk + embed + novelty
+linkDocument(documentVersionId: string, opts?): Promise<LinkReport>
+linkAll(opts?): Promise<LinkReport[]>
+rollupCoverage(): Promise<{ concepts: number }>
+generateItems(opts?): Promise<GenerateItemsReport>
+reembedAll(opts?): Promise<ReembedReport>          // scoped rebuild
+rebuildMemoryStates(): Promise<{ items; reviewsReplayed }>   // replay the review log
+ingestCitations(opts?): Promise<CitationIngestReport>
+buildCooccurrence(opts?): Promise<{ edges: number }>
 ```
 
-`rebuild` always re-applies user overrides. That is part of the contract, not an
-implementation detail, and it is covered by a test that a rebuild cannot pass
+Every relink re-applies user overrides. That is part of the contract, not an
+implementation detail, and it is covered by a test that a relink cannot pass
 without.
 
 ## Coverage queries
@@ -71,12 +85,10 @@ uncoveredButRecurring(opts: {
 
 bridgeGaps(opts: { limit: number }): Promise<{ clusterA: ConceptRef[]; clusterB: ConceptRef[]; strength: number }[]>
 
-decayedCoverage(opts: {
-  notContactedSinceDays: number;
-  limit: number;
-}): Promise<{ concept: ConceptRef; coverage: Coverage; retention: RetentionEvidence }[]>
+staleCoverage(opts: { before: string; limit?: number }): Promise<ConceptGap[]>
 
-searchCorpus(q: string, opts?: { semantic?: boolean; limit?: number }): Promise<SearchHit[]>
+search(q: string, opts?: SearchOptions): Promise<SearchHit[]>          // semantic
+searchLiteral(q: string, opts?: SearchOptions): Promise<SearchHit[]>   // no embedder needed
 ```
 
 ```typescript
@@ -190,10 +202,14 @@ taxonomy(rootConceptId: string | null, opts: {
 
 timeline(opts: {
   from: string; to: string;
-  conceptIds?: string[];
-  granularity: 'day' | 'week' | 'month';
+  conceptIds?: readonly string[];
+  granularity?: 'day' | 'week' | 'month';
+  limit?: number;
 }): Promise<TimelineRow[]>
 ```
+
+A `TimelineRow` carries encounters, graded reviews and `largestGapDays` — the
+evidence, never a modelled retention figure. The gaps are the point.
 
 `GraphEdge` carries `provenance` so the client can style a vocabulary claim
 differently from a co-occurrence statistic. Rendering them identically would
@@ -203,14 +219,28 @@ present a derived correlation as an asserted fact.
 
 ```typescript
 setSourcePrivate(sourceId: string, isPrivate: boolean): Promise<void>
-egressLog(opts: { from?: string; limit: number }): Promise<EgressEntry[]>
-exportAll(opts: { format: 'sqlite' | 'jsonl'; destination: string }): Promise<{ path: string }>
-deleteSource(sourceId: string): Promise<{ deletedRows: Record<string, number> }>
-deleteConceptHistory(conceptId: string): Promise<{ deletedRows: Record<string, number> }>
+isSourcePrivate(sourceId: string): Promise<boolean>
+classifyUrl(url: string): PrivacyClassification         // what would happen, without capturing
+
+egressLog(opts?: { from?: string; limit?: number }): Promise<EgressEntry[]>
+egressSummary(): Promise<{ destination; purpose; calls; bytes }[]>
+
+exportJsonl(): AsyncGenerator<string>
+exportJsonlString(): Promise<string>
+exportAll(sink: (line: string) => void | Promise<void>): Promise<{ lines: number }>
+
+deleteSource(sourceId: string): Promise<DeleteReport>
+deleteConceptHistory(conceptId: string): Promise<ConceptDeleteReport>
 ```
 
-`deleteSource` returns what it deleted. Deletion that cannot be verified is
-deletion the user has to take on faith.
+`exportAll` takes a sink rather than a destination path: core does not touch
+the filesystem, because `node:fs` does not exist in a mobile JS runtime. The
+client writes the stream wherever it belongs.
+
+`deleteSource` and `deleteConceptHistory` both return what they deleted.
+Deletion that cannot be verified is deletion the user has to take on faith.
+`deleteConceptHistory` leaves the sources intact: the user is saying "stop
+tracking this idea", not "I never read those articles".
 
 ## Contract rules
 
@@ -225,3 +255,8 @@ deletion the user has to take on faith.
    succeeds if the row was written, regardless of what happens downstream.
 5. **Anything that can run offline, does.** Network is required only for the
    stages named in [09](09-privacy-and-security.md) § egress.
+6. **Every egress is refused for a private source and logged before it is
+   made.** Enforcement is layered: content-gathering queries exclude private
+   sources, so private material is never assembled into a request, and the
+   transport wrapper refuses anyway if one slips through. A call site cannot
+   opt out of either.

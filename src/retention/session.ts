@@ -17,6 +17,8 @@ import {
 } from './scheduler.js';
 import type { ReviewRating } from './scheduler.js';
 import { parseRubric, parseEvidence } from './items.js';
+import { withEgress } from '../privacy/egress.js';
+import { redactText } from '../privacy/redact.js';
 
 export interface ReviewCard {
   quizItemId: Ulid;
@@ -178,12 +180,27 @@ export async function submitReview(
   const points = parseRubric(item.expected_points_json);
   const evidence = parseEvidence(item.evidence_json);
 
-  const grade = await grader.grade({
+  const redactedAnswer = redactText(input.answerText);
+  const request = {
     prompt: item.prompt,
-    answerText: input.answerText,
+    answerText: redactedAnswer.value,
     expectedPoints: points,
     evidenceText: evidence.map((e) => e.text).join('\n\n'),
-  });
+  };
+
+  // The grade is a judgment that leaves the device; the raw answer stored
+  // below is not the redacted one, because that is the attested evidence.
+  const grade = await withEgress(
+    db, clock,
+    {
+      destination: 'model_proxy',
+      purpose: 'grade',
+      sourceIds: [...new Set(evidence.map((e) => e.sourceId))],
+      bytesSent: JSON.stringify(request).length,
+      redactions: redactedAnswer.redactions,
+    },
+    () => grader.grade(request),
+  );
 
   const rating = scoreToRating(grade.score, scheduler.thresholds);
   const reviewId = ulid(clock.nowMs());

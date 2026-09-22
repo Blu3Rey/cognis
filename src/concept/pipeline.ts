@@ -18,6 +18,8 @@ import { ulid } from '../ids.js';
 import { spotMentions, SPOTTER_VERSION } from './spotter.js';
 import type { SpotOptions } from './spotter.js';
 import { loadOverrides, applyOverrides, resolveConceptId } from './overrides.js';
+import { withEgress, isSourcePrivate } from '../privacy/egress.js';
+import { redactText } from '../privacy/redact.js';
 
 export const LINKER_PIPELINE_VERSION = `spotter-${SPOTTER_VERSION}/pipeline-1.0.0`;
 
@@ -36,6 +38,8 @@ export interface LinkOptions extends SpotOptions {
 
 export interface LinkReport {
   documentVersionId: Ulid;
+  /** True when the source is private, so nothing was sent anywhere. */
+  skippedPrivate: boolean;
   chunksProcessed: number;
   spotted: number;
   anchored: number;
@@ -102,6 +106,24 @@ export async function linkDocument(
   const minConfidence = opts.minConfidence ?? 0.55;
   const createLocal = opts.createLocalConcepts ?? true;
 
+  const owner = await db.get<{ source_id: string; title: string | null }>(
+    `SELECT dv.source_id AS source_id, s.title AS title
+       FROM document_version dv JOIN source s ON s.id = dv.source_id
+      WHERE dv.id = ?`,
+    [documentVersionId],
+  );
+  if (!owner) throw new Error(`no such document version: ${documentVersionId}`);
+
+  const emptyReport: LinkReport = {
+    documentVersionId, skippedPrivate: true, chunksProcessed: 0, spotted: 0,
+    anchored: 0, nil: 0, localCreated: 0, mentionsWritten: 0,
+    overrides: { removed: 0, forced: 0, remapped: 0 },
+  };
+
+  // A private source is never assembled into a request. Linking degrades
+  // gracefully and visibly rather than leaking (docs/09 § rule 2 and 6).
+  if (await isSourcePrivate(db, owner.source_id)) return emptyReport;
+
   const chunks = await db.all<{
     id: string; text: string; section_path: string | null; start_char: number;
   }>(
@@ -109,14 +131,11 @@ export async function linkDocument(
       WHERE document_version_id = ? ORDER BY ordinal`,
     [documentVersionId],
   );
-  const titleRow = await db.get<{ title: string | null }>(
-    `SELECT s.title AS title FROM document_version dv
-       JOIN source s ON s.id = dv.source_id WHERE dv.id = ?`,
-    [documentVersionId],
-  );
+  const titleRow = { title: owner.title };
 
   const report: LinkReport = {
     documentVersionId,
+    skippedPrivate: false,
     chunksProcessed: 0,
     spotted: 0,
     anchored: 0,
@@ -151,13 +170,26 @@ export async function linkDocument(
       });
     }
 
-    const decisions = await linker.disambiguate({
+    const redacted = redactText(chunk.text);
+    const request = {
       chunkId: chunk.id,
-      chunkText: chunk.text,
+      chunkText: redacted.value,
       sectionPath: chunk.section_path,
-      documentTitle: titleRow?.title ?? null,
+      documentTitle: titleRow.title,
       mentions,
-    });
+    };
+
+    const decisions = await withEgress(
+      db, clock,
+      {
+        destination: 'model_proxy',
+        purpose: 'link',
+        sourceIds: [owner.source_id],
+        bytesSent: JSON.stringify(request).length,
+        redactions: redacted.redactions,
+      },
+      () => linker.disambiguate(request),
+    );
     perChunk.push({ chunkId: chunk.id, decisions });
   }
 
@@ -232,8 +264,13 @@ export async function linkAll(
   linker: Linker,
   opts: LinkOptions = {},
 ): Promise<LinkReport[]> {
+  // Private sources are excluded at the query, so a relink can never pick one
+  // up even if a future call site forgets to check.
   const docs = await db.all<{ id: string }>(
-    'SELECT id FROM document_version ORDER BY id',
+    `SELECT dv.id AS id FROM document_version dv
+       JOIN source s ON s.id = dv.source_id
+      WHERE COALESCE(s.is_private, 0) = 0
+      ORDER BY dv.id`,
   );
   const reports: LinkReport[] = [];
   for (const d of docs) {
