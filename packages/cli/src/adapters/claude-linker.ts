@@ -25,16 +25,20 @@ import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
 import type { Linker, LinkRequest, LinkDecision } from '@cognis/core';
+import {
+  LINKER_INSTRUCTIONS, LINKER_PROMPT_VERSION, renderLinkRequest,
+  reconcileDecisions, allNil,
+} from './linker-prompt.js';
 
-export const LINKER_PROMPT_VERSION = 'claude-linker@1.0.0';
 export const DEFAULT_LINKER_MODEL = 'claude-opus-5';
 
 /**
- * The output contract.
+ * The output contract, as Zod for the SDK's structured-output helper.
  *
- * `conceptId` is nullable because NIL is a first-class answer: over-eager
- * anchoring is how a graph fills with wrong nodes, and a wrong anchor is far
- * harder to notice than a missing one.
+ * Mirrors LINK_OUTPUT_SCHEMA in linker-prompt.ts, which is what the Ollama
+ * linker sends. Two encodings of one contract, because the two providers take
+ * different schema formats — they must stay in step, and a test asserts they
+ * accept the same shape.
  */
 const Decision = z.object({
   surfaceForm: z.string(),
@@ -43,35 +47,6 @@ const Decision = z.object({
   isPrimary: z.boolean(),
 });
 const LinkDecisions = z.object({ decisions: z.array(Decision) });
-
-/**
- * Stable across every call, so it caches. Changing a byte here invalidates the
- * cache for the whole run, which is why the prompt version is pinned and
- * recorded on every mention.
- */
-const INSTRUCTIONS = `You are a concept linker for a personal knowledge management system.
-
-For each surface form found in a passage, you choose which of the supplied
-candidate concepts it refers to — or decide that none of them fits.
-
-Rules:
-
-1. Choose ONLY from the candidate ids given for that surface form. Never invent
-   an identifier, and never return an id supplied for a different surface form.
-2. If no candidate is the concept the passage actually means, return null. A
-   missing link is recoverable; a wrong link silently corrupts every count
-   built on top of it. Prefer null when genuinely unsure.
-3. confidence is your probability that the chosen candidate is correct, from
-   0 to 1. Use the full range. If you return null, confidence expresses how
-   sure you are that none of the candidates fit.
-4. isPrimary answers a different question: is this passage's document ABOUT
-   this concept, or does it merely mention it? A passing reference, an example,
-   or a citation is not primary. Something the document explains, argues about
-   or is centred on is primary. Most mentions are NOT primary.
-5. Judge the surface form as the passage uses it, not as the word is most
-   commonly used elsewhere. Acronyms and common words are the usual traps.
-
-Return one decision per surface form you were given, in the order given.`;
 
 export interface ClaudeLinkerOptions {
   client?: Anthropic;
@@ -136,12 +111,6 @@ export class ClaudeLinker implements Linker {
   async disambiguate(req: LinkRequest): Promise<LinkDecision[]> {
     if (req.mentions.length === 0) return [];
 
-    // Anything the model returns must be traceable to a candidate we supplied.
-    const allowed = new Map<string, Set<string>>();
-    for (const m of req.mentions) {
-      allowed.set(m.surfaceForm, new Set(m.candidates.map((c) => c.id)));
-    }
-
     const params = {
       model: this.modelId,
       max_tokens: this.#maxTokens,
@@ -153,13 +122,13 @@ export class ClaudeLinker implements Linker {
       system: [
         {
           type: 'text' as const,
-          text: INSTRUCTIONS,
+          text: LINKER_INSTRUCTIONS,
           // The breakpoint sits at the end of the stable prefix; everything
           // volatile is in the user message after it.
           cache_control: { type: 'ephemeral' as const },
         },
       ],
-      messages: [{ role: 'user' as const, content: renderRequest(req) }],
+      messages: [{ role: 'user' as const, content: renderLinkRequest(req) }],
     };
 
     const client = this.#client;
@@ -204,14 +173,7 @@ export class ClaudeLinker implements Linker {
     if (refused) {
       // One chunk tripping a classifier must not abort a document. Every
       // surface form becomes NIL, which the pipeline already handles.
-      return req.mentions.map((m) => ({
-        surfaceForm: m.surfaceForm,
-        startChar: m.startChar,
-        endChar: m.endChar,
-        conceptId: null,
-        confidence: 0,
-        isPrimary: false,
-      }));
+      return allNil(req);
     }
 
     const parsed = response.parsed_output;
@@ -221,38 +183,9 @@ export class ClaudeLinker implements Linker {
       );
     }
 
-    // Match decisions back to the mentions by surface form, in order, so a
-    // model that returns them out of order or drops one cannot shift offsets
-    // onto the wrong span.
-    const bySurface = new Map<string, typeof parsed.decisions>();
-    for (const d of parsed.decisions) {
-      const list = bySurface.get(d.surfaceForm) ?? [];
-      list.push(d);
-      bySurface.set(d.surfaceForm, list);
-    }
-
-    return req.mentions.map((mention) => {
-      const decision = bySurface.get(mention.surfaceForm)?.shift();
-      const permitted = allowed.get(mention.surfaceForm) ?? new Set<string>();
-
-      // A returned id that was never offered is discarded. A hallucinated QID
-      // would enter the graph as a real node and be nearly impossible to spot.
-      const conceptId =
-        decision?.conceptId && permitted.has(decision.conceptId)
-          ? decision.conceptId
-          : null;
-
-      return {
-        surfaceForm: mention.surfaceForm,
-        startChar: mention.startChar,
-        endChar: mention.endChar,
-        conceptId,
-        confidence: conceptId
-          ? Math.max(0, Math.min(1, decision?.confidence ?? 0))
-          : 0,
-        isPrimary: conceptId ? decision?.isPrimary === true : false,
-      };
-    });
+    // Reconciliation is shared with every other linker: same guard against an
+    // invented identifier, same rule that offsets come from the request.
+    return reconcileDecisions(req, parsed.decisions);
   }
 }
 

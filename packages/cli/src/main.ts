@@ -31,8 +31,8 @@ ${bold('CAPTURE')}
   index [--all]               Chunk and embed anything not yet indexed
   reindex --all               Re-chunk and re-embed everything (after a model change)
 
-${bold('CONCEPTS')}  ${dim('(these cost money — see --dry-run)')}
-  link [--all]                Resolve concepts via Wikidata + Claude, roll up coverage
+${bold('CONCEPTS')}  ${dim('(--linker claude costs money; --linker ollama is local)')}
+  link [--all]                Resolve concepts via Wikidata + an LLM, roll up coverage
   concepts [--limit N]        What the corpus is about
   gaps [--min-sources N]      Met from several sources, never covered directly
 
@@ -59,8 +59,12 @@ ${bold('OPTIONS')}
   --offline                             Never fetch model weights
   --json                                Machine-readable output
   --no-index                            Capture and extract without embedding
-  --linker-model <id>                   Default: claude-opus-5
-  --effort <low|medium|high|xhigh|max>  Linker effort. Default: low
+  --linker <claude|ollama>              Default: claude
+  --linker-model <id>                   Default: claude-opus-5, or qwen3:14b for ollama
+  --effort <low|medium|high|xhigh|max>  Claude linker effort. Default: low
+  --ollama-url <url>                    Default: http://127.0.0.1:11434
+  --ollama-timeout <seconds>            Default: 180
+  --num-ctx <n>                         Ollama context window. Default: 8192
   --dry-run                             Show what link would process, spend nothing
   --min-words N                         Short-document floor (fetched pages default 50)
   --private                             Force a capture private
@@ -69,6 +73,7 @@ ${bold('ENVIRONMENT')}
   COGNIS_HOME     Data directory (default ~/.cognis)
   COGNIS_DB       Database path
   COGNIS_MODELS   Model weight cache
+  COGNIS_OLLAMA_URL  Ollama server (an SSH tunnel lands here)
 `;
 
 function embedderChoice(value: string | undefined): EmbedderChoice {
@@ -94,6 +99,24 @@ async function main(argv: string[]): Promise<number> {
 
   // Linking needs a vocabulary and a linker; nothing else should construct a
   // network client or an API key requirement it will not use.
+  if (args.command === 'link' || args.command === 'doctor') {
+    const kind = flagString(args.flags, 'linker');
+    if (kind) {
+      if (kind !== 'claude' && kind !== 'ollama') {
+        throw new Error(`--linker must be claude or ollama (got "${kind}")`);
+      }
+      openOpts.linkerKind = kind;
+    }
+    const ollamaUrl = flagString(args.flags, 'ollama-url');
+    if (ollamaUrl) openOpts.ollamaUrl = ollamaUrl;
+    if (args.flags.has('ollama-timeout')) {
+      openOpts.ollamaTimeoutMs = flagNumber(args.flags, 'ollama-timeout', 180) * 1000;
+    }
+    if (args.flags.has('num-ctx')) {
+      openOpts.ollamaNumCtx = flagNumber(args.flags, 'num-ctx', 8192);
+    }
+  }
+
   if (args.command === 'link') {
     openOpts.linking = !flagBool(args.flags, 'dry-run');
     const model = flagString(args.flags, 'linker-model');
@@ -216,18 +239,44 @@ async function main(argv: string[]): Promise<number> {
         if (asJson) { json(report); return report.failed.length ? 1 : 0; }
 
         success(`linked ${report.linked}/${report.documents} documents`);
-        pairs([
+        const rows: [string, string | number | null][] = [
           ['mentions', report.mentions],
           ['anchored', report.anchored],
           ['NIL (no candidate fit)', report.nil],
           ['new local concepts', report.localConcepts],
           ['concepts in corpus', report.concepts],
           ['skipped (private)', report.skippedPrivate],
-          ['cost', `$${report.cost.usd.toFixed(4)} (${report.cost.inputTokens} in, ` +
-            `${report.cost.outputTokens} out, ${report.cost.cacheReadTokens} cached)`],
-        ]);
-        if (report.cost.refusals > 0) {
-          warn(`${report.cost.refusals} chunk(s) were declined and linked as NIL`);
+        ];
+
+        if (ctx.linkerKind === 'ollama') {
+          const calls = ctx.ollamaUsage.length;
+          const seconds = ctx.ollamaUsage.reduce((n, u) => n + u.totalDurationMs, 0) / 1000;
+          const promptTokens = ctx.ollamaUsage.reduce((n, u) => n + u.promptTokens, 0);
+          rows.push(['local inference', `${calls} calls, ${seconds.toFixed(1)}s, ` +
+            `${promptTokens} prompt tokens (no charge)`]);
+          pairs(rows);
+
+          const truncated = ctx.ollamaUsage.filter((u) => u.truncatedPrompt).length;
+          if (truncated > 0) {
+            warn(
+              `${truncated} chunk(s) filled the context window — the model may not have ` +
+              'seen every candidate. Re-run with a larger --num-ctx.',
+            );
+          }
+          const malformed = ctx.ollamaUsage.filter((u) => u.malformedOutput).length;
+          if (malformed > 0) {
+            warn(
+              `${malformed} chunk(s) produced unusable output and were linked as NIL. ` +
+              'A smaller model holding the output contract loosely is the usual cause.',
+            );
+          }
+        } else {
+          rows.push(['cost', `$${report.cost.usd.toFixed(4)} (${report.cost.inputTokens} in, ` +
+            `${report.cost.outputTokens} out, ${report.cost.cacheReadTokens} cached)`]);
+          pairs(rows);
+          if (report.cost.refusals > 0) {
+            warn(`${report.cost.refusals} chunk(s) were declined and linked as NIL`);
+          }
         }
         for (const f of report.failed) fail(`${f.documentVersionId}: ${f.reason}`);
 
@@ -361,10 +410,31 @@ async function main(argv: string[]): Promise<number> {
       }
 
       case 'doctor': {
+        const { OllamaLinker } = await import('./adapters/ollama-linker.js');
+        const probeOllama = flagString(args.flags, 'linker') === 'ollama'
+          || flagBool(args.flags, 'ollama');
+        const ollama = probeOllama
+          ? new OllamaLinker({
+              baseUrl: flagString(args.flags, 'ollama-url') ?? ctx.paths.ollamaUrl,
+              ...(flagString(args.flags, 'linker-model')
+                ? { model: flagString(args.flags, 'linker-model')! }
+                : {}),
+            })
+          : null;
+
         const report = await doctor(ctx.cognis, {
           dbPath: ctx.paths.dbPath,
           modelDir: ctx.paths.modelDir,
           embedderKind: ctx.embedderKind,
+          ...(ollama
+            ? {
+                ollama: {
+                  baseUrl: ollama.baseUrl,
+                  model: ollama.modelId.replace(/^ollama:/, ''),
+                  listModels: () => ollama.listModels(),
+                },
+              }
+            : {}),
         });
         if (asJson) { json(report); return report.ok ? 0 : 1; }
         for (const c of report.checks) {

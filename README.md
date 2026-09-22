@@ -57,6 +57,7 @@ schema and in review.
 | [10-api-contract.md](docs/10-api-contract.md) | The surface the mobile client consumes |
 | [11-roadmap.md](docs/11-roadmap.md) | Milestones and build order |
 | [12-evaluation.md](docs/12-evaluation.md) | How we know any of this works |
+| [13-refinement-plan.md](docs/13-refinement-plan.md) | Codebase survey and prioritised refinement plan |
 | [adr/](docs/adr/) | Architecture decision records |
 
 ## Status
@@ -96,7 +97,7 @@ schema and in review.
 | Taxonomy tree from vocabulary hierarchy | done |
 | Linking eval harness (precision, recall, NIL, identity stability) | done |
 | **≥200-mention labelled eval set** | **seed set only — see [eval/README.md](eval/README.md)** |
-| Wikidata client; model-backed linker | **done in the CLI** — see [packages/cli](packages/cli) |
+| Wikidata client; model-backed linker | **done in the CLI** — Claude and Ollama, see [packages/cli](packages/cli) |
 
 | M3 item | State |
 |---|---|
@@ -218,7 +219,7 @@ packages/core/src/
 
 packages/cli/src/
   adapters/         real fetching, Readability extraction, transformers.js,
-                    Wikidata vocabulary, Claude linker
+                    Wikidata vocabulary, Claude and Ollama linkers
   commands/         ingest, index, reporting, doctor
   bin.ts            entry point
 ```
@@ -246,7 +247,7 @@ here rather than buried:
    downstream inherits linking quality — coverage numbers, quiz targets,
    suggestion gaps. **This is the most valuable thing left to do.**
 2. **Whether reading telemetry helps** (M5). The harness is
-   `src/eval/engagement.ts` and runs a counterfactual replay of the review log
+   `packages/core/src/eval/engagement.ts` and runs a counterfactual replay of the review log
    with and without the engagement prior. The prior's multipliers are a
    starting guess, not an established result. If real data says it does not
    improve calibration, the honest response is to neutralise it and shrink the
