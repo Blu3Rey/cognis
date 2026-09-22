@@ -1,0 +1,162 @@
+/**
+ * The M0 completion criterion: a corpus round-trips through export and
+ * re-import with zero attested rows lost, including from failed extractions.
+ */
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { freshCognis } from './helpers.js';
+import { textFingerprint } from '../src/canonical/hash.js';
+import { assertManifestCoversSchema } from '../src/export/jsonl.js';
+import { ATTESTED_TABLES, TABLES } from '../src/export/tables.js';
+
+/** Build a corpus resembling a month of mixed, partly-failing capture. */
+async function buildCorpus() {
+  const { cognis, clock } = await freshCognis();
+
+  for (let day = 0; day < 30; day++) {
+    clock.advanceDays(1);
+    const res = await cognis.capture({
+      kind: day % 5 === 0 ? 'doi' : 'url',
+      payload: day % 5 === 0
+        ? `10.1234/paper.${day}`
+        : `https://example.com/article-${day}?utm_source=feed`,
+      capturePath: day % 3 === 0 ? 'reader' : 'share_sheet',
+    });
+
+    if (day % 7 === 3) {
+      // Extraction failures are part of a normal month and must survive.
+      await cognis.recordExtractionFailure(res.ingestionEventId, 'paywall: 402');
+      continue;
+    }
+
+    const text = `Article ${day}. Retrieval practice strengthens retention.`;
+    const dv = await cognis.recordExtraction({
+      sourceId: res.sourceId,
+      ingestionEventId: res.ingestionEventId,
+      text,
+      textHash: await textFingerprint(text),
+      producer: 'readability',
+      producerVersion: '1.0.0',
+    });
+
+    await cognis.recordEngagement(res.ingestionEventId, 'read', 'telemetry');
+
+    if (day % 4 === 0) {
+      await cognis.annotate(dv.documentVersionId, {
+        kind: 'highlight', startChar: 0, endChar: 10,
+        quotedText: `Article ${day}`,
+      });
+      await cognis.recordEngagement(res.ingestionEventId, 'annotate', 'user_asserted');
+    }
+
+    if (day % 11 === 0) {
+      await cognis.db.run(
+        `INSERT INTO reading_session
+           (id, ingestion_event_id, started_at, ended_at, active_ms,
+            max_scroll_pct, scroll_reversals, est_words_visible)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [`rs_${day}`.padEnd(26, '0'), res.ingestionEventId, clock.now(),
+         clock.now(), 120_000, 0.92, 3, 800],
+      );
+      await cognis.db.run(
+        `INSERT INTO user_assertion
+           (id, kind, subject_type, subject_id, object_id, value, note, created_at)
+         VALUES (?, 'quality', 'source', ?, NULL, 4, 'useful', ?)`,
+        [`ua_${day}`.padEnd(26, '0'), res.sourceId, clock.now()],
+      );
+    }
+  }
+
+  // Re-encounter an earlier article: a second event on one source.
+  clock.advanceDays(1);
+  await cognis.capture({
+    kind: 'url', payload: 'https://example.com/article-3', capturePath: 'reader',
+  });
+
+  return { cognis, clock };
+}
+
+async function tableCounts(cognis: Awaited<ReturnType<typeof buildCorpus>>['cognis']) {
+  const counts: Record<string, number> = {};
+  for (const spec of TABLES) {
+    const row = await cognis.db.get<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM ${spec.name}`,
+    );
+    counts[spec.name] = row?.n ?? 0;
+  }
+  return counts;
+}
+
+test('a month of capture round-trips with zero attested rows lost', async () => {
+  const { cognis } = await buildCorpus();
+  const before = await tableCounts(cognis);
+
+  // Sanity: the fixture must actually contain the hard cases.
+  assert.ok(before['source']! > 25, 'expected a month of sources');
+  assert.ok(before['annotation']! > 0, 'expected annotations');
+  assert.ok(before['reading_session']! > 0, 'expected reading sessions');
+  const failed = await cognis.db.get<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM ingestion_event WHERE status = 'extraction_failed'`,
+  );
+  assert.ok(failed!.n > 0, 'expected failed extractions in the fixture');
+
+  const exported = await cognis.exportJsonlString();
+
+  const { cognis: restored } = await freshCognis();
+  const report = await restored.importJsonlString(exported);
+
+  assert.deepEqual(report.mismatches, [], 'import must match the header counts');
+
+  const after = await tableCounts(restored);
+  assert.deepEqual(after, before, 'every table must round-trip exactly');
+
+  for (const t of ATTESTED_TABLES) {
+    assert.equal(after[t], before[t], `attested table ${t} lost rows`);
+  }
+
+  // Byte-identical re-export proves the data, not just the counts, survived.
+  assert.equal(
+    (await restored.exportJsonlString()).split('\n').slice(1).join('\n'),
+    exported.split('\n').slice(1).join('\n'),
+    'a re-export must be byte-identical below the header',
+  );
+
+  await cognis.close();
+  await restored.close();
+});
+
+test('failed extractions survive the round trip with their reason', async () => {
+  const { cognis } = await buildCorpus();
+  const exported = await cognis.exportJsonlString();
+  const { cognis: restored } = await freshCognis();
+  await restored.importJsonlString(exported);
+
+  const rows = await restored.db.all<{ status: string; status_reason: string }>(
+    `SELECT status, status_reason FROM ingestion_event WHERE status = 'extraction_failed'`,
+  );
+  assert.ok(rows.length > 0);
+  for (const r of rows) assert.equal(r.status_reason, 'paywall: 402');
+
+  await cognis.close();
+  await restored.close();
+});
+
+test('the export manifest covers every table in the schema', async () => {
+  const { cognis } = await freshCognis();
+  await assertManifestCoversSchema(cognis.db);
+  await cognis.close();
+});
+
+test('importing a foreign or future export is refused', async () => {
+  const { cognis } = await freshCognis();
+  await assert.rejects(
+    cognis.importJsonlString('{"format":"something-else","version":1}\n'),
+    /not a cognis export/,
+  );
+  await assert.rejects(
+    cognis.importJsonlString('{"format":"cognis-jsonl","version":999,"tables":[]}\n'),
+    /unsupported export version/,
+  );
+  await cognis.close();
+});
