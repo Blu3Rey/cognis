@@ -1,35 +1,20 @@
 {
-  "name": "@cognis/core",
+  "name": "cognis",
   "version": "0.0.1",
   "private": true,
-  "description": "cognis core: schema, capture pipeline, and provenance bookkeeping",
+  "description": "cognis monorepo: the core library and the CLI that exercises it",
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    }
-  },
-  "files": [
-    "dist"
+  "workspaces": [
+    "packages/core",
+    "packages/cli"
   ],
   "engines": {
     "node": ">=22.5.0"
   },
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test dist/test/**/*.test.js",
-    "check": "npm run typecheck && npm run test && npm run verify:manifest",
-    "verify:manifest": "node scripts/verify-manifest.mjs"
-  },
-  "devDependencies": {
-    "@types/node": "^22.0.0",
-    "typescript": "^5.9.0"
-  },
-  "dependencies": {
-    "ts-fsrs": "^5.4.2"
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "check": "npm run check --workspaces --if-present"
   }
 }

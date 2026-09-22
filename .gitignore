@@ -6,3 +6,6 @@ dist/
 *.db-wal
 *.db-shm
 .DS_Store
+
+# Downloaded embedding model weights. Large, reproducible, never committed.
+.models/

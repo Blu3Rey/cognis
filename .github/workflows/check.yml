@@ -5,7 +5,6 @@ on:
     branches: ['**']
   pull_request:
 
-# A superseded run tells you nothing useful, so cancel it rather than pay for it.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -22,16 +21,13 @@ jobs:
           node-version: '22'
           cache: npm
 
+      # @huggingface/transformers is an optionalDependency whose onnxruntime-node
+      # postinstall fetches native binaries; that failure is tolerated by design
+      # and the CLI falls back to the lexical embedder.
       - run: npm ci
 
-      - name: Typecheck
-        run: npm run typecheck
+      - name: Core — typecheck, test, verify export manifest
+        run: npm run check -w @cognis/core
 
-      - name: Build
-        run: npm run build
-
-      - name: Test
-        run: node --test "dist/test/**/*.test.js"
-
-      - name: Verify the export manifest covers the schema
-        run: node scripts/verify-manifest.mjs
+      - name: CLI — typecheck and test
+        run: npm run check -w @cognis/cli

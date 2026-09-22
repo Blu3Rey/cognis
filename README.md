@@ -155,22 +155,45 @@ Extraction and the UI are client concerns: core defines the ports and owns the
 state machine, and the client supplies the WebView extractor. See
 [ADR-0003](docs/adr/0003-stack-selection.md).
 
+## Packages
+
+| Package | What it is |
+|---|---|
+| [`packages/core`](packages/core) | The library: schema, pipelines, engines, API contract. Zero runtime dependencies beyond a pinned scheduler. |
+| [`packages/cli`](packages/cli) | A real client that gets actual reading through the actual pipeline, and the scripting surface for the evaluations. |
+
 ## Development
 
 ```bash
 npm install
-npm run check      # typecheck + build + test + manifest verification
+npm run check              # both packages: typecheck, build, test
+
+npm run check -w @cognis/core
+npm run check -w @cognis/cli
 ```
 
-CI runs the same thing on every push ([.github/workflows/check.yml](.github/workflows/check.yml)).
+CI runs the same on every push ([.github/workflows/check.yml](.github/workflows/check.yml)).
+
+### Try it
+
+```bash
+npm run build -w @cognis/cli
+COGNIS_HOME=/tmp/try node packages/cli/dist/src/bin.js ingest https://example.com/article
+COGNIS_HOME=/tmp/try node packages/cli/dist/src/bin.js search "something you read"
+```
+
+See [packages/cli/README.md](packages/cli/README.md) for enabling real semantic
+embeddings, which need one optional dependency.
 
 Requires Node ≥ 22.5 (the tests use the built-in `node:sqlite` and
 `node:test`). The core package has exactly one runtime dependency, `ts-fsrs`,
 pinned per [ADR-0006](docs/adr/0006-fsrs-scheduling.md) — reproducing years of
-spaced-repetition parameter fitting badly is not a saving.
+spaced-repetition parameter fitting badly is not a saving. The CLI's heavier
+dependencies are confined to its own package, which is why the repo is a
+workspace.
 
 ```
-src/
+packages/core/src/
   types.ts          domain types, attested/derived split
   ids.ts            ULID
   ports/            SqlDriver, Clock — injected, never imported concretely
@@ -192,6 +215,11 @@ src/
   search/           semantic and literal search
   export/           JSONL export/import and the table manifest
   core.ts           the facade from docs/10-api-contract.md
+
+packages/cli/src/
+  adapters/         real fetching, Readability extraction, transformers.js
+  commands/         ingest, index, reporting, doctor
+  bin.ts            entry point
 ```
 
 ## Two things to fix before this is used for real
