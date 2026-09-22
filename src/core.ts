@@ -21,6 +21,14 @@ import { deleteSource } from './capture/delete.js';
 import type { DeleteReport } from './capture/delete.js';
 import { exportJsonl, exportJsonlString, importJsonl, linesOf } from './export/jsonl.js';
 import type { ImportReport } from './export/jsonl.js';
+import type { Embedder } from './ports/embedder.js';
+import { chunkAndEmbed, reembedAll } from './embed/pipeline.js';
+import type { ChunkAndEmbedResult, ReembedReport } from './embed/pipeline.js';
+import { computeNovelty, recordNovelty } from './embed/novelty.js';
+import type { NoveltyResult } from './embed/novelty.js';
+import { semanticSearch, literalSearch } from './search/semantic.js';
+import type { SearchHit, SearchOptions } from './search/semantic.js';
+import type { ChunkOptions } from './chunk/chunker.js';
 import { toSource, toIngestionEvent } from './capture/rows.js';
 import type { SourceRow, IngestionEventRow } from './capture/rows.js';
 import type {
@@ -32,15 +40,32 @@ import { ulid } from './ids.js';
 export interface CognisOptions {
   db: SqlDriver;
   clock?: Clock;
+  /**
+   * Optional until M1 features are used. Absent means the corpus still
+   * captures, exports and deletes — it simply has no vectors, so novelty and
+   * semantic search are unavailable and say so rather than returning silence.
+   */
+  embedder?: Embedder;
 }
 
 export class Cognis {
   readonly db: SqlDriver;
   readonly clock: Clock;
+  readonly embedder: Embedder | null;
 
   constructor(opts: CognisOptions) {
     this.db = opts.db;
     this.clock = opts.clock ?? systemClock;
+    this.embedder = opts.embedder ?? null;
+  }
+
+  #requireEmbedder(feature: string): Embedder {
+    if (!this.embedder) {
+      throw new Error(
+        `${feature} needs an embedder; construct Cognis with { embedder }`,
+      );
+    }
+    return this.embedder;
   }
 
   /** Apply pending migrations. Safe to call on every startup. */
@@ -99,6 +124,60 @@ export class Cognis {
       ],
     );
     return { annotationId: id };
+  }
+
+  // -- Chunking, embedding, novelty (M1) -----------------------------------
+
+  /** Chunk and embed a document version. Idempotent; re-running replaces. */
+  async chunkAndEmbed(
+    documentVersionId: Ulid,
+    opts: ChunkOptions = {},
+  ): Promise<ChunkAndEmbedResult> {
+    return chunkAndEmbed(
+      this.db, this.clock, this.#requireEmbedder('chunkAndEmbed'),
+      documentVersionId, opts,
+    );
+  }
+
+  /**
+   * Chunk, embed, and record novelty in one step — the share-time path.
+   *
+   * Novelty is computed before this document's own vectors could match
+   * themselves, so the score answers "is this new to me?" rather than "is this
+   * identical to itself?".
+   */
+  async indexDocument(args: {
+    documentVersionId: Ulid;
+    ingestionEventId: Ulid;
+    chunkOptions?: ChunkOptions;
+  }): Promise<{ indexed: ChunkAndEmbedResult; novelty: NoveltyResult; noveltyRecorded: boolean }> {
+    const embedder = this.#requireEmbedder('indexDocument');
+    const indexed = await this.chunkAndEmbed(
+      args.documentVersionId, args.chunkOptions ?? {},
+    );
+    const novelty = await computeNovelty(this.db, embedder, args.documentVersionId);
+    const { recorded } = await recordNovelty(this.db, args.ingestionEventId, novelty);
+    return { indexed, novelty, noveltyRecorded: recorded };
+  }
+
+  async computeNovelty(documentVersionId: Ulid): Promise<NoveltyResult> {
+    return computeNovelty(this.db, this.#requireEmbedder('computeNovelty'), documentVersionId);
+  }
+
+  /** Re-embed the whole corpus. A scoped rebuild, not a migration. */
+  async reembedAll(opts: ChunkOptions = {}): Promise<ReembedReport> {
+    return reembedAll(this.db, this.clock, this.#requireEmbedder('reembedAll'), opts);
+  }
+
+  // -- Search --------------------------------------------------------------
+
+  async search(query: string, opts: SearchOptions = {}): Promise<SearchHit[]> {
+    return semanticSearch(this.db, this.#requireEmbedder('search'), query, opts);
+  }
+
+  /** Literal substring search. Works with no embedder and no vectors. */
+  async searchLiteral(query: string, opts: SearchOptions = {}): Promise<SearchHit[]> {
+    return literalSearch(this.db, query, opts);
   }
 
   // -- Reads ---------------------------------------------------------------

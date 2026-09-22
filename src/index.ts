@@ -30,10 +30,28 @@ export type { PriorCoverage } from './capture/prior-coverage.js';
 export { deleteSource } from './capture/delete.js';
 export type { DeleteReport } from './capture/delete.js';
 
+export { chunkText, CHUNKER_VERSION } from './chunk/chunker.js';
+export type { TextChunk, ChunkOptions } from './chunk/chunker.js';
+
+export type { Embedder } from './ports/embedder.js';
+export { HashEmbedder } from './adapters/hash-embedder.js';
+export type { HashEmbedderOptions } from './adapters/hash-embedder.js';
+
+export { toBlob, fromBlob, l2Normalise, cosine } from './embed/vectors.js';
+export { chunkAndEmbed, reembedAll } from './embed/pipeline.js';
+export type { ChunkAndEmbedResult, ReembedReport } from './embed/pipeline.js';
+export { computeNovelty, recordNovelty } from './embed/novelty.js';
+export type { NoveltyResult } from './embed/novelty.js';
+export { putVector, scanVectors, vectorCount } from './embed/store.js';
+export type { StoredVector, ScanOptions } from './embed/store.js';
+
+export { semanticSearch, literalSearch } from './search/semantic.js';
+export type { SearchHit, SearchOptions } from './search/semantic.js';
+
 export {
   exportJsonl, exportJsonlString, importJsonl, linesOf,
   assertManifestCoversSchema, EXPORT_FORMAT_VERSION,
 } from './export/jsonl.js';
 export type { ExportHeader, ExportRow, ImportReport } from './export/jsonl.js';
-export { TABLES, ATTESTED_TABLES } from './export/tables.js';
+export { TABLES, ATTESTED_TABLES, REBUILDABLE_TABLES } from './export/tables.js';
 export type { TableSpec } from './export/tables.js';

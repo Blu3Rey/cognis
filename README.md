@@ -61,8 +61,8 @@ schema and in review.
 
 ## Status
 
-**M0 in progress** — the attested core is implemented and tested. See
-[11-roadmap.md](docs/11-roadmap.md) for what M0 covers and what comes next.
+**M0 complete, M1 complete** in core. See
+[11-roadmap.md](docs/11-roadmap.md) for what each milestone covers.
 
 | M0 item | State |
 |---|---|
@@ -74,6 +74,16 @@ schema and in review.
 | Extraction *implementation* (Readability, PDF text layer) | client-side, not started |
 | Encryption at rest | not started |
 | Minimal list UI | client-side, not started |
+
+| M1 item | State |
+|---|---|
+| Chunking with section paths | done |
+| Embedding behind an injected port; `model_id` per vector | done |
+| Novelty at ingest and the prior-coverage card | done |
+| Semantic and literal search | done |
+| Re-embed as a scoped rebuild | done |
+| ONNX embedder | device-side, not started |
+| `sqlite-vec` ANN index | device-side; portable brute-force scan in place |
 
 Extraction and the UI are client concerns: core defines the ports and owns the
 state machine, and the client supplies the WebView extractor. See
@@ -99,6 +109,9 @@ src/
   db/               schema migrations and the forward-only runner
   canonical/        URL, DOI and content-hash normalisation
   capture/          the attested write path, prior coverage, deletion
+  chunk/            structural chunking with heading breadcrumbs
+  embed/            vector storage, the embed pipeline, novelty
+  search/           semantic and literal search
   export/           JSONL export/import and the table manifest
   core.ts           the facade from docs/10-api-contract.md
 ```

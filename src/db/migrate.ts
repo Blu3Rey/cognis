@@ -10,6 +10,7 @@
 import type { SqlDriver } from '../ports/sql.js';
 import type { Clock } from '../ports/clock.js';
 import * as m001 from './migrations/001_initial.js';
+import * as m002 from './migrations/002_chunks_embeddings.js';
 
 export interface Migration {
   id: string;
@@ -17,7 +18,10 @@ export interface Migration {
 }
 
 /** Ordered. Never reorder or edit an applied migration; append a new one. */
-export const MIGRATIONS: readonly Migration[] = [{ id: m001.id, up: m001.up }];
+export const MIGRATIONS: readonly Migration[] = [
+  { id: m001.id, up: m001.up },
+  { id: m002.id, up: m002.up },
+];
 
 const MIGRATION_TABLE = `
 CREATE TABLE IF NOT EXISTS schema_migration (
