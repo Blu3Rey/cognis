@@ -136,6 +136,8 @@ export const TABLES: readonly TableSpec[] = [
     columns: [
       'id', 'ingestion_event_id', 'started_at', 'ended_at', 'active_ms',
       'max_scroll_pct', 'scroll_reversals', 'est_words_visible',
+      'plausible', 'implausible_reason', 'capped_active_ms',
+      'expected_reading_ms', 'producer_version',
     ],
   },
   {

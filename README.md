@@ -121,6 +121,17 @@ schema and in review.
 | Expiry, dismissal, nothing auto-ingested | done |
 | Crossref / OpenAlex client | backend-side, not started |
 
+| M5 item | State |
+|---|---|
+| Telemetry ingestion with plausibility guards | done |
+| Telemetry-derived engagement levels | done |
+| Engagement prior feeding the scheduler (a **hypothesis**) | done |
+| Counterfactual harness for the falsification test | done |
+| `synthesis` item type, gated on two or more sources | done |
+| Neighbourhood (ego) graph view | done |
+| In-app reader / WebView | client-side, not started |
+| **The falsification result itself** | **needs real telemetry — see below** |
+
 Extraction and the UI are client concerns: core defines the ports and owns the
 state machine, and the client supplies the WebView extractor. See
 [ADR-0003](docs/adr/0003-stack-selection.md).
@@ -153,10 +164,32 @@ src/
   eval/             the linking evaluation harness
   retention/        scheduling, items, grading, calibration, evidence
   suggest/          citation graph, structural gaps, ranking
+  reader/           telemetry guards, engagement derivation, the prior
+  graph/            bounded neighbourhood queries
   search/           semantic and literal search
   export/           JSONL export/import and the table manifest
   core.ts           the facade from docs/10-api-contract.md
 ```
+
+## Two open measurements
+
+Both are built and neither has been run against real data. They are the two
+places where this project could still turn out to be wrong, so they are listed
+here rather than buried:
+
+1. **Linker precision** (M2). The harness is `src/eval/linking.ts`; the
+   labelled set it needs does not exist. See [eval/README.md](eval/README.md).
+   Everything downstream inherits linking quality — coverage numbers, quiz
+   targets, suggestion gaps.
+2. **Whether reading telemetry helps** (M5). The harness is
+   `src/eval/engagement.ts` and runs a counterfactual replay of the review log
+   with and without the engagement prior. The prior's multipliers are a
+   starting guess, not an established result. If real data says it does not
+   improve calibration, the honest response is to neutralise it and shrink the
+   reader's scope — which ADR-0007 already anticipates.
+
+Running either against simulated data produces a number that reflects the
+simulation, not reality. Both harnesses say so.
 
 Start with [00-vision-and-scope.md](docs/00-vision-and-scope.md), then
 [11-roadmap.md](docs/11-roadmap.md).

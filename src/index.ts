@@ -133,6 +133,31 @@ export type {
   GenerateSuggestionsOptions,
 } from './suggest/rank.js';
 
+export {
+  recordTelemetry, assessPlausibility, deriveEngagement,
+  TELEMETRY_VERSION, READING_WPM, MAX_TIME_MULTIPLE, MIN_READ_FRACTION,
+  READ_SCROLL_PCT, MIN_SESSION_MS,
+} from './reader/telemetry.js';
+export type {
+  RawTelemetry, PlausibilityVerdict, RecordTelemetryResult,
+} from './reader/telemetry.js';
+export {
+  DEFAULT_ENGAGEMENT_PRIOR, NEUTRAL_ENGAGEMENT_PRIOR, multiplierFor,
+  ENGAGEMENT_PRIOR_VERSION,
+} from './reader/engagement-prior.js';
+export type { EngagementPrior } from './reader/engagement-prior.js';
+
+export { neighbourhood, MAX_NEIGHBOURHOOD_NODES } from './graph/neighbourhood.js';
+export type {
+  Neighbourhood, NeighbourhoodOptions, GraphNode, GraphEdge, EdgeProvenance,
+} from './graph/neighbourhood.js';
+
+export {
+  evaluateEngagementPrior, formatEngagementComparison,
+  MIN_REVIEWS_FOR_COMPARISON,
+} from './eval/engagement.js';
+export type { EngagementComparison, ReplayScore } from './eval/engagement.js';
+
 export { runLinkingEval, identityStability, formatReport } from './eval/linking.js';
 export type {
   GoldMention, GoldDocument, LinkingMetrics, LinkingEvalReport,

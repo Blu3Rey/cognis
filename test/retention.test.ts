@@ -170,3 +170,37 @@ test('a user override changes the rating and the schedule', async () => {
   );
   await cognis.close();
 });
+
+test('synthesis items need two sources and are skipped below that', async () => {
+  const { cognis } = await freshCognis();
+  // One source only: a synthesis question about how sources differ cannot
+  // honestly be asked, so the writer declines rather than inventing one.
+  await ingestAndLink(cognis, 'https://example.com/spacing', SPACING, 'Spacing');
+  await cognis.generateItems({ kinds: ['synthesis'] });
+
+  const single = await cognis.db.get<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM quiz_item WHERE kind = 'synthesis'`,
+  );
+  assert.equal(single!.n, 0, 'one source cannot support a cross-source question');
+
+  // A second source covering the same concept makes it possible.
+  await ingestAndLink(
+    cognis, 'https://example.com/spacing-2',
+    `Spaced repetition is sometimes criticised. Spaced repetition schedules can
+     feel mechanical, and spaced repetition may suit facts more than reasoning.`,
+    'A critique of spaced repetition',
+  );
+  await cognis.generateItems({ kinds: ['synthesis'] });
+
+  const rows = await cognis.db.all<{ evidence_json: string }>(
+    `SELECT evidence_json FROM quiz_item WHERE kind = 'synthesis'`,
+  );
+  assert.ok(rows.length > 0, 'two sources on one concept must enable synthesis');
+
+  const evidence = JSON.parse(rows[0]!.evidence_json) as { sourceId: string }[];
+  assert.ok(
+    new Set(evidence.map((e) => e.sourceId)).size >= 2,
+    'a synthesis item must cite more than one source, or it is not synthesis',
+  );
+  await cognis.close();
+});

@@ -123,7 +123,10 @@ export async function generateItemsForConcept(
   conceptId: string,
   opts: GenerateItemsOptions = {},
 ): Promise<{ generated: number; rejected: { reason: string }[] }> {
-  const kinds = opts.kinds ?? (['free_recall', 'cloze'] as const);
+  // `synthesis` is included by default from M5: it needs two or more primary
+  // sources, which the writer checks, and it is the item type no other product
+  // can generate because no other product knows what else the user read.
+  const kinds = opts.kinds ?? (['free_recall', 'cloze', 'synthesis'] as const);
   const maxItems = opts.maxItemsPerConcept ?? 3;
   const maxEvidence = opts.maxEvidence ?? 8;
 

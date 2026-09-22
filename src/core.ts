@@ -66,6 +66,12 @@ import {
   generateSuggestions, activeSuggestions, dismissSuggestion,
 } from './suggest/rank.js';
 import type { Suggestion, GenerateSuggestionsOptions } from './suggest/rank.js';
+import { recordTelemetry } from './reader/telemetry.js';
+import type { RawTelemetry, RecordTelemetryResult } from './reader/telemetry.js';
+import { neighbourhood } from './graph/neighbourhood.js';
+import type { Neighbourhood, NeighbourhoodOptions } from './graph/neighbourhood.js';
+import { evaluateEngagementPrior } from './eval/engagement.js';
+import type { EngagementComparison } from './eval/engagement.js';
 import { toSource, toIngestionEvent } from './capture/rows.js';
 import type { SourceRow, IngestionEventRow } from './capture/rows.js';
 import type {
@@ -461,6 +467,39 @@ export class Cognis {
     reason?: 'not_interested' | 'already_known' | 'not_now',
   ): Promise<void> {
     return dismissSuggestion(this.db, this.clock, id, reason);
+  }
+
+  // -- Reader telemetry and views (M5) -------------------------------------
+
+  /**
+   * Record a reading session.
+   *
+   * Plausibility is judged and stored rather than applied by dropping rows: a
+   * phone left open on an article produces a real session that is useless as
+   * evidence, and "did not happen" is not the same as "happened but is not
+   * trustworthy".
+   */
+  async recordTelemetry(t: RawTelemetry): Promise<RecordTelemetryResult> {
+    return recordTelemetry(this.db, t);
+  }
+
+  /** Bounded ego graph. There is no global graph view, by design. */
+  async neighbourhood(
+    conceptId: string,
+    opts: NeighbourhoodOptions = {},
+  ): Promise<Neighbourhood> {
+    return neighbourhood(this.db, conceptId, opts);
+  }
+
+  /**
+   * M5's falsification test: does telemetry-derived engagement actually
+   * improve scheduling? Counterfactual replay of the real review log with and
+   * without the engagement prior.
+   */
+  async evaluateEngagementPrior(
+    opts: Parameters<typeof evaluateEngagementPrior>[1] = {},
+  ): Promise<EngagementComparison> {
+    return evaluateEngagementPrior(this.db, opts);
   }
 
   // -- Search --------------------------------------------------------------
