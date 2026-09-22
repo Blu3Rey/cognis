@@ -65,8 +65,20 @@ Sync moves ciphertext only and is not an egress of content.
 End-to-end encrypted, or absent. There is no middle option in which the server
 can read the corpus.
 
-- Content key derived from a user passphrase (memory-hard KDF), held in the
-  device keystore; the passphrase never leaves the device.
+- Content key derived from a user passphrase, held in the device keystore; the
+  passphrase never leaves the device.
+
+  **Known deviation.** The portable implementation uses PBKDF2-SHA256 at
+  600,000 iterations, because that is the strongest KDF Web Crypto offers and
+  core must run in a mobile JS runtime. PBKDF2 is compute-hard but **not**
+  memory-hard, which makes it materially cheaper to attack with GPUs or ASICs
+  than Argon2id. Key derivation is therefore a port: a device build should
+  inject Argon2id via a native module or WASM, and the KDF identifier is
+  recorded in the keyset so a corpus encrypted under one can be recognised and
+  re-wrapped rather than silently failing to open. Until that is done, the
+  passphrase strength requirement is correspondingly higher.
+- Content encryption is AES-256-GCM, which is authenticated: a tampered blob
+  fails to decrypt rather than decrypting to plausible garbage.
 - The relay stores opaque blobs plus the minimum metadata needed to order them.
 - Conflict resolution is last-writer-wins per row for derived data (recomputable
   anyway) and **union for attested data** — two devices that each recorded a

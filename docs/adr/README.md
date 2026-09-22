@@ -16,3 +16,4 @@ Status is one of Proposed, Accepted, Superseded by NNNN.
 | [0006](0006-fsrs-scheduling.md) | Use an existing DSR scheduler; item scope only | Accepted |
 | [0007](0007-share-sheet-before-browser.md) | Share sheet before the built-in reader | Accepted |
 | [0008](0008-model-access-via-backend-proxy.md) | All model access through a backend proxy | Accepted |
+| [0009](0009-deterministic-source-identity.md) | Derive source identity from its natural key | Accepted |

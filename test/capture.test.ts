@@ -146,3 +146,51 @@ test('novelty without its embedding model is rejected by the schema', async () =
   );
   await cognis.close();
 });
+
+test('source ids are deterministic, so two devices agree without coordinating', async () => {
+  const { sourceIdFor } = await import('../src/canonical/source-id.js');
+
+  // The property sync depends on: same natural key, same id, independently.
+  const a = await sourceIdFor({ canonicalUrl: 'https://example.com/a' });
+  const b = await sourceIdFor({ canonicalUrl: 'https://example.com/a' });
+  assert.equal(a.id, b.id);
+  assert.equal(a.basis, 'url');
+
+  // A DOI outranks a URL, being the more stable identity.
+  const doi = await sourceIdFor({
+    doi: '10.1234/x', canonicalUrl: 'https://example.com/a',
+  });
+  assert.equal(doi.basis, 'doi');
+  assert.notEqual(doi.id, a.id);
+
+  // Different material must not collide.
+  const other = await sourceIdFor({ canonicalUrl: 'https://example.com/b' });
+  assert.notEqual(other.id, a.id);
+
+  // With no natural key at all, two imports are genuinely two things.
+  const r1 = await sourceIdFor({});
+  const r2 = await sourceIdFor({});
+  assert.notEqual(r1.id, r2.id);
+  assert.equal(r1.basis, 'random');
+});
+
+test('two independent captures of one URL produce one source id', async () => {
+  const first = await freshCognis();
+  const second = await freshCognis();
+
+  const a = await first.cognis.capture({
+    kind: 'url', payload: 'https://example.com/shared?utm_source=x',
+    capturePath: 'share_sheet',
+  });
+  const b = await second.cognis.capture({
+    kind: 'url', payload: 'https://www.example.com/shared/',
+    capturePath: 'reader',
+  });
+
+  assert.equal(
+    b.sourceId, a.sourceId,
+    'separate devices must agree on identity without ever talking to each other',
+  );
+  await first.cognis.close();
+  await second.cognis.close();
+});

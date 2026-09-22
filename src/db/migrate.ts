@@ -15,6 +15,7 @@ import * as m003 from './migrations/003_concepts.js';
 import * as m004 from './migrations/004_retention.js';
 import * as m005 from './migrations/005_suggestions.js';
 import * as m006 from './migrations/006_telemetry.js';
+import * as m007 from './migrations/007_sync.js';
 
 export interface Migration {
   id: string;
@@ -29,6 +30,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { id: m004.id, up: m004.up },
   { id: m005.id, up: m005.up },
   { id: m006.id, up: m006.up },
+  { id: m007.id, up: m007.up },
 ];
 
 const MIGRATION_TABLE = `

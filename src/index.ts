@@ -158,6 +158,23 @@ export {
 } from './eval/engagement.js';
 export type { EngagementComparison, ReplayScore } from './eval/engagement.js';
 
+export type { SyncRelay, RelayBatch } from './ports/sync-relay.js';
+export type { KeyDerivation, KdfParams } from './ports/key-derivation.js';
+export { MemoryRelay } from './adapters/memory-relay.js';
+export {
+  SyncCipher, Pbkdf2KeyDerivation, newKeyset, describeRecovery,
+  ENVELOPE_VERSION, PBKDF2_ITERATIONS, SALT_BYTES,
+} from './sync/crypto.js';
+export type { SyncKeyset, Envelope } from './sync/crypto.js';
+export { toBase64, fromBase64 } from './sync/base64.js';
+export {
+  push, pull, saveKeyset, loadKeyset, deviceId, resetPullCursor,
+  SYNC_PROTOCOL_VERSION,
+} from './sync/sync.js';
+export type { SyncPayload, PushReport, PullReport } from './sync/sync.js';
+export { mergeRow, SYNCED_TABLES, APPLY_ORDER } from './sync/merge.js';
+export type { Row } from './sync/merge.js';
+
 export { runLinkingEval, identityStability, formatReport } from './eval/linking.js';
 export type {
   GoldMention, GoldDocument, LinkingMetrics, LinkingEvalReport,

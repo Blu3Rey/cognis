@@ -72,6 +72,16 @@ import { neighbourhood } from './graph/neighbourhood.js';
 import type { Neighbourhood, NeighbourhoodOptions } from './graph/neighbourhood.js';
 import { evaluateEngagementPrior } from './eval/engagement.js';
 import type { EngagementComparison } from './eval/engagement.js';
+import type { SyncRelay } from './ports/sync-relay.js';
+import type { KeyDerivation } from './ports/key-derivation.js';
+import {
+  SyncCipher, newKeyset, describeRecovery, Pbkdf2KeyDerivation,
+} from './sync/crypto.js';
+import type { SyncKeyset } from './sync/crypto.js';
+import {
+  push, pull, saveKeyset, loadKeyset, deviceId, resetPullCursor,
+} from './sync/sync.js';
+import type { PushReport, PullReport } from './sync/sync.js';
 import { toSource, toIngestionEvent } from './capture/rows.js';
 import type { SourceRow, IngestionEventRow } from './capture/rows.js';
 import type {
@@ -101,6 +111,13 @@ export interface CognisOptions {
   scheduler?: SchedulerOptions;
   /** Citation graph access. Required to ingest citations. */
   scholarGraph?: ScholarGraph;
+  /** Encrypted blob relay. Required for sync. */
+  syncRelay?: SyncRelay;
+  /**
+   * Key derivation. Defaults to PBKDF2, which is portable but NOT memory-hard
+   * — a device build should inject Argon2id. See ports/key-derivation.ts.
+   */
+  keyDerivation?: KeyDerivation;
 }
 
 export class Cognis {
@@ -113,6 +130,8 @@ export class Cognis {
   readonly grader: Grader | null;
   readonly scheduler: Scheduler;
   readonly scholarGraph: ScholarGraph | null;
+  readonly syncRelay: SyncRelay | null;
+  readonly keyDerivation: KeyDerivation;
 
   constructor(opts: CognisOptions) {
     this.db = opts.db;
@@ -124,6 +143,15 @@ export class Cognis {
     this.grader = opts.grader ?? null;
     this.scheduler = new Scheduler(opts.scheduler ?? {});
     this.scholarGraph = opts.scholarGraph ?? null;
+    this.syncRelay = opts.syncRelay ?? null;
+    this.keyDerivation = opts.keyDerivation ?? new Pbkdf2KeyDerivation();
+  }
+
+  #requireRelay(feature: string): SyncRelay {
+    if (!this.syncRelay) {
+      throw new Error(`${feature} needs a syncRelay; construct Cognis with one`);
+    }
+    return this.syncRelay;
   }
 
   #requireItemWriter(feature: string): ItemWriter {
@@ -500,6 +528,65 @@ export class Cognis {
     opts: Parameters<typeof evaluateEngagementPrior>[1] = {},
   ): Promise<EngagementComparison> {
     return evaluateEngagementPrior(this.db, opts);
+  }
+
+  // -- Sync (M6) -----------------------------------------------------------
+
+  /** Device identifier, minted on first use. */
+  async deviceId(): Promise<string> {
+    return deviceId(this.db, this.clock);
+  }
+
+  /**
+   * Create and store a sync keyset.
+   *
+   * The passphrase is used here and discarded; only the salt and KDF
+   * parameters are stored. There is no key escrow and no recovery path — see
+   * `recoveryWarning()`.
+   */
+  async initSync(): Promise<SyncKeyset> {
+    const keyset = newKeyset(this.keyDerivation);
+    await saveKeyset(this.db, this.clock, keyset);
+    return keyset;
+  }
+
+  async syncKeyset(): Promise<SyncKeyset | null> {
+    return loadKeyset(this.db);
+  }
+
+  /** Open the cipher for this corpus. Throws if the passphrase is wrong. */
+  async openCipher(passphrase: string): Promise<SyncCipher> {
+    const keyset = await loadKeyset(this.db);
+    if (!keyset) throw new Error('sync is not set up on this device; call initSync first');
+    return SyncCipher.open(keyset, this.keyDerivation, passphrase);
+  }
+
+  /** Push dirty attested rows to the relay as one encrypted batch. */
+  async push(cipher: SyncCipher): Promise<PushReport> {
+    return push(this.db, this.clock, this.#requireRelay('push'), cipher);
+  }
+
+  /** Pull and merge batches from other devices. */
+  async pull(cipher: SyncCipher, opts: { limit?: number } = {}): Promise<PullReport> {
+    return pull(this.db, this.clock, this.#requireRelay('pull'), cipher, opts);
+  }
+
+  async resetPullCursor(cursor: string | null): Promise<void> {
+    return resetPullCursor(this.db, cursor);
+  }
+
+  /** Rows waiting to be pushed. */
+  async pendingSyncRows(): Promise<number> {
+    const row = await this.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM sync_dirty');
+    return row?.n ?? 0;
+  }
+
+  /**
+   * The passphrase-loss warning, in the words the setup screen should use.
+   * Kept in core so it cannot be quietly softened in a design review.
+   */
+  recoveryWarning(): string {
+    return describeRecovery();
   }
 
   // -- Search --------------------------------------------------------------

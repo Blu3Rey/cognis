@@ -132,6 +132,17 @@ schema and in review.
 | In-app reader / WebView | client-side, not started |
 | **The falsification result itself** | **needs real telemetry — see below** |
 
+| M6 item | State |
+|---|---|
+| End-to-end encrypted sync (AES-256-GCM) | done |
+| Trigger-based change tracking for attested rows | done |
+| Order-independent merge rules; convergence tested | done |
+| Deterministic source identity ([ADR-0009](docs/adr/0009-deterministic-source-identity.md)) | done |
+| Derived data recomputed, never synced | done |
+| Passphrase-loss warning, stated plainly | done |
+| Argon2id key derivation | **portable fallback is PBKDF2 — see [docs/09](docs/09-privacy-and-security.md)** |
+| Relay service; key enrolment UX | client/backend-side, not started |
+
 Extraction and the UI are client concerns: core defines the ports and owns the
 state machine, and the client supplies the WebView extractor. See
 [ADR-0003](docs/adr/0003-stack-selection.md).
@@ -166,10 +177,20 @@ src/
   suggest/          citation graph, structural gaps, ranking
   reader/           telemetry guards, engagement derivation, the prior
   graph/            bounded neighbourhood queries
+  sync/             E2E crypto, change tracking, merge rules
   search/           semantic and literal search
   export/           JSONL export/import and the table manifest
   core.ts           the facade from docs/10-api-contract.md
 ```
+
+## Three things to fix before this is used for real
+
+1. **Key derivation is PBKDF2, not Argon2id.** It is the strongest KDF Web
+   Crypto offers, it is behind a port, and the deviation is documented — but
+   it is a deviation from what [docs/09](docs/09-privacy-and-security.md)
+   specifies, and it is the only thing protecting a synced corpus.
+2. **Encryption at rest** on the device is still not wired up (open since M0).
+3. The two measurements below.
 
 ## Two open measurements
 

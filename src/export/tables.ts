@@ -229,6 +229,24 @@ export const TABLES: readonly TableSpec[] = [
     ],
   },
   {
+    name: 'sync_state',
+    attested: false,
+    // Local device state: a device id, a relay cursor, and the keyset salt.
+    // Meaningless on another device and never exported.
+    exportable: false,
+    orderBy: 'id',
+    columns: [
+      'id', 'device_id', 'keyset_json', 'pull_cursor', 'last_push_at', 'last_pull_at',
+    ],
+  },
+  {
+    name: 'sync_dirty',
+    attested: false,
+    exportable: false,
+    orderBy: 'table_name, row_id',
+    columns: ['table_name', 'row_id', 'marked_at'],
+  },
+  {
     name: 'egress_log',
     attested: true,
     exportable: true,

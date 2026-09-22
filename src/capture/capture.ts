@@ -18,6 +18,7 @@ import type {
 import { ulid } from '../ids.js';
 import { canonicaliseUrl } from '../canonical/url.js';
 import { normaliseDoi, arxivDoi, arxivIdFromUrl } from '../canonical/doi.js';
+import { sourceIdFor } from '../canonical/source-id.js';
 import { toSource, toIngestionEvent } from './rows.js';
 import type { SourceRow, IngestionEventRow } from './rows.js';
 import type { PriorCoverage } from './prior-coverage.js';
@@ -153,11 +154,11 @@ export async function capture(
   clock: Clock,
   input: CaptureInput,
 ): Promise<CaptureResult> {
-  const identity = resolveIdentity(input);
+  const identity0 = resolveIdentity(input);
   const occurredAt = input.occurredAt ?? clock.now();
 
   return db.transaction(async () => {
-    const existing = await findExisting(db, identity, input.contentHash);
+    const existing = await findExisting(db, identity0, input.contentHash);
 
     let sourceId: Ulid;
     let reEncounter: boolean;
@@ -168,18 +169,26 @@ export async function capture(
       // Backfill identity we did not have the first time. A source first seen
       // as a bare URL may later be recognised as a paper with a DOI, and that
       // upgrade must not create a second source.
-      if (identity.doi && !existing.doi) {
+      if (identity0.doi && !existing.doi) {
         await db.run('UPDATE source SET doi = ?, kind = ? WHERE id = ?', [
-          identity.doi, 'paper', sourceId,
+          identity0.doi, 'paper', sourceId,
         ]);
       }
-      if (identity.canonicalUrl && !existing.canonicalUrl) {
+      if (identity0.canonicalUrl && !existing.canonicalUrl) {
         await db.run('UPDATE source SET canonical_url = ? WHERE id = ?', [
-          identity.canonicalUrl, sourceId,
+          identity0.canonicalUrl, sourceId,
         ]);
       }
     } else {
-      sourceId = ulid(clock.nowMs());
+      // Deterministic from the natural key, so two devices reading the same
+      // article independently arrive at the same id and sync has nothing to
+      // reconcile. See canonical/source-id.ts.
+      const identity = await sourceIdFor({
+        doi: identity0.doi,
+        canonicalUrl: identity0.canonicalUrl,
+        contentHash: input.contentHash ?? null,
+      });
+      sourceId = identity.id;
       reEncounter = false;
       await db.run(
         `INSERT INTO source
@@ -188,9 +197,9 @@ export async function capture(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           sourceId,
-          identity.kind,
-          identity.canonicalUrl,
-          identity.doi,
+          identity0.kind,
+          identity0.canonicalUrl,
+          identity0.doi,
           null,
           input.contentHash ?? null,
           input.title ?? null,
