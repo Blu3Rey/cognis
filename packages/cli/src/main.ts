@@ -15,6 +15,7 @@ import { indexPending } from './commands/index-cmd.js';
 import {
   corpusStats, sourceDetail, recentCaptures, doctor,
 } from './commands/report.js';
+import { linkCorpus, coverageGaps, topConcepts } from './commands/link.js';
 import {
   info, success, warn, fail, json, pairs, table, bold, dim, green, yellow,
   ellipsis, relativeTime,
@@ -29,6 +30,11 @@ ${bold('CAPTURE')}
   ingest <url|file>...        Fetch, extract, store and index
   index [--all]               Chunk and embed anything not yet indexed
   reindex --all               Re-chunk and re-embed everything (after a model change)
+
+${bold('CONCEPTS')}  ${dim('(these cost money — see --dry-run)')}
+  link [--all]                Resolve concepts via Wikidata + Claude, roll up coverage
+  concepts [--limit N]        What the corpus is about
+  gaps [--min-sources N]      Met from several sources, never covered directly
 
 ${bold('READ')}
   list [--limit N]            Recent captures
@@ -53,6 +59,9 @@ ${bold('OPTIONS')}
   --offline                             Never fetch model weights
   --json                                Machine-readable output
   --no-index                            Capture and extract without embedding
+  --linker-model <id>                   Default: claude-opus-5
+  --effort <low|medium|high|xhigh|max>  Linker effort. Default: low
+  --dry-run                             Show what link would process, spend nothing
   --min-words N                         Short-document floor (fetched pages default 50)
   --private                             Force a capture private
 
@@ -83,8 +92,24 @@ async function main(argv: string[]): Promise<number> {
     offline: flagBool(args.flags, 'offline'),
   };
 
+  // Linking needs a vocabulary and a linker; nothing else should construct a
+  // network client or an API key requirement it will not use.
+  if (args.command === 'link') {
+    openOpts.linking = !flagBool(args.flags, 'dry-run');
+    const model = flagString(args.flags, 'linker-model');
+    if (model) openOpts.linkerModel = model;
+    const effort = flagString(args.flags, 'effort');
+    if (effort) {
+      if (!['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) {
+        throw new Error(`--effort must be low, medium, high, xhigh or max (got "${effort}")`);
+      }
+      openOpts.linkerEffort = effort as 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+    }
+    openOpts.embedder = 'none';
+  }
+
   // Commands that never touch an embedder should not pay to construct one.
-  const readOnly = ['list', 'show', 'stats', 'privacy', 'export', 'import'];
+  const readOnly = ['list', 'show', 'stats', 'privacy', 'export', 'import', 'concepts', 'gaps'];
   if (readOnly.includes(args.command) && !args.flags.has('embedder')) {
     openOpts.embedder = 'none';
   }
@@ -162,6 +187,84 @@ async function main(argv: string[]): Promise<number> {
         success(`indexed ${report.indexed}/${report.considered} documents, ${report.chunks} chunks`);
         for (const f of report.failures) fail(`${f.documentVersionId}: ${f.reason}`);
         return report.failures.length ? 1 : 0;
+      }
+
+      case 'link': {
+        const all = flagBool(args.flags, 'all');
+        const limit = flagNumber(args.flags, 'limit', 500);
+
+        if (flagBool(args.flags, 'dry-run')) {
+          const pending = await ctx.cognis.db.all<{ n: number }>(
+            `SELECT COUNT(*) AS n FROM document_version dv
+               JOIN source s ON s.id = dv.source_id
+              WHERE COALESCE(s.is_private, 0) = 0
+                AND (? = 1 OR NOT EXISTS (
+                      SELECT 1 FROM mention m JOIN chunk c ON c.id = m.chunk_id
+                       WHERE c.document_version_id = dv.id))`,
+            [all ? 1 : 0],
+          );
+          const chunks = await ctx.cognis.db.get<{ n: number }>(
+            'SELECT COUNT(*) AS n FROM chunk',
+          );
+          const docs = pending[0]?.n ?? 0;
+          info(`${bold(String(docs))} document(s) would be linked, ~${chunks?.n ?? 0} chunks.`);
+          info(dim('One model call per chunk. Nothing was sent and nothing was spent.'));
+          return 0;
+        }
+
+        const report = await linkCorpus(ctx.cognis, ctx.linkerUsage, { all, limit });
+        if (asJson) { json(report); return report.failed.length ? 1 : 0; }
+
+        success(`linked ${report.linked}/${report.documents} documents`);
+        pairs([
+          ['mentions', report.mentions],
+          ['anchored', report.anchored],
+          ['NIL (no candidate fit)', report.nil],
+          ['new local concepts', report.localConcepts],
+          ['concepts in corpus', report.concepts],
+          ['skipped (private)', report.skippedPrivate],
+          ['cost', `$${report.cost.usd.toFixed(4)} (${report.cost.inputTokens} in, ` +
+            `${report.cost.outputTokens} out, ${report.cost.cacheReadTokens} cached)`],
+        ]);
+        if (report.cost.refusals > 0) {
+          warn(`${report.cost.refusals} chunk(s) were declined and linked as NIL`);
+        }
+        for (const f of report.failed) fail(`${f.documentVersionId}: ${f.reason}`);
+
+        info('');
+        warn(
+          'coverage numbers built on these links are only as good as the linker, ' +
+          'and its precision has not been measured against a labelled set yet (docs/12 §2)',
+        );
+        return report.failed.length ? 1 : 0;
+      }
+
+      case 'concepts': {
+        const rows = await topConcepts(ctx.cognis, flagNumber(args.flags, 'limit', 30));
+        if (asJson) { json(rows); return 0; }
+        table(['PRIMARY', 'SOURCES', 'LABEL', 'ID'], rows.map((r) => [
+          r.primarySources, r.distinctSources, ellipsis(r.label, 44), r.conceptId,
+        ]));
+        return 0;
+      }
+
+      case 'gaps': {
+        const rows = await coverageGaps(ctx.cognis, {
+          minSources: flagNumber(args.flags, 'min-sources', 2),
+          limit: flagNumber(args.flags, 'limit', 25),
+          includeLocal: flagBool(args.flags, 'include-local'),
+        });
+        if (asJson) { json(rows); return 0; }
+        if (rows.length === 0) {
+          info(dim('no gaps yet — link more of the corpus, or lower --min-sources'));
+          return 0;
+        }
+        info(dim('met from several sources, never covered directly:\n'));
+        table(['SOURCES', 'SPREAD', 'LABEL', 'ID'], rows.map((r) => [
+          r.distinctSources, `${r.temporalSpreadDays}d`,
+          ellipsis(r.label, 44), r.conceptId,
+        ]));
+        return 0;
       }
 
       case 'list': {

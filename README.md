@@ -96,7 +96,7 @@ schema and in review.
 | Taxonomy tree from vocabulary hierarchy | done |
 | Linking eval harness (precision, recall, NIL, identity stability) | done |
 | **≥200-mention labelled eval set** | **seed set only — see [eval/README.md](eval/README.md)** |
-| Wikidata client; model-backed linker | client/backend-side, not started |
+| Wikidata client; model-backed linker | **done in the CLI** — see [packages/cli](packages/cli) |
 
 | M3 item | State |
 |---|---|
@@ -217,7 +217,8 @@ packages/core/src/
   core.ts           the facade from docs/10-api-contract.md
 
 packages/cli/src/
-  adapters/         real fetching, Readability extraction, transformers.js
+  adapters/         real fetching, Readability extraction, transformers.js,
+                    Wikidata vocabulary, Claude linker
   commands/         ingest, index, reporting, doctor
   bin.ts            entry point
 ```
@@ -239,10 +240,11 @@ Both are built and neither has been run against real data. They are the two
 places where this project could still turn out to be wrong, so they are listed
 here rather than buried:
 
-1. **Linker precision** (M2). The harness is `src/eval/linking.ts`; the
-   labelled set it needs does not exist. See [eval/README.md](eval/README.md).
-   Everything downstream inherits linking quality — coverage numbers, quiz
-   targets, suggestion gaps.
+1. **Linker precision** (M2). The harness is `packages/core/src/eval/linking.ts`
+   and the real linker now exists (`cognis link`), but the labelled set it
+   grades against does not. See [eval/README.md](eval/README.md). Everything
+   downstream inherits linking quality — coverage numbers, quiz targets,
+   suggestion gaps. **This is the most valuable thing left to do.**
 2. **Whether reading telemetry helps** (M5). The harness is
    `src/eval/engagement.ts` and runs a counterfactual replay of the review log
    with and without the engagement prior. The prior's multipliers are a

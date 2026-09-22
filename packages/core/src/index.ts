@@ -46,7 +46,7 @@ export { putVector, scanVectors, vectorCount } from './embed/store.js';
 export type { StoredVector, ScanOptions } from './embed/store.js';
 
 export type {
-  VocabularyClient, ConceptCandidate, VocabularyEdge,
+  VocabularyClient, ConceptCandidate, VocabularyEdge, VocabularyHierarchy,
 } from './ports/vocabulary.js';
 export type { Linker, LinkRequest, LinkDecision, SpottedMention } from './ports/linker.js';
 export { FixtureVocabulary } from './adapters/fixture-vocabulary.js';

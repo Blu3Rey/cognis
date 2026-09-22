@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 /**
  * Wiring core's ports to real implementations.
  *
@@ -7,9 +8,12 @@
  */
 
 import { Cognis, NodeSqliteDriver, HashEmbedder, systemClock } from '@cognis/core';
-import type { Embedder } from '@cognis/core';
+import type { Embedder, VocabularyClient, Linker } from '@cognis/core';
 import { TransformersEmbedder, DEFAULT_MODEL, DEFAULT_DIM } from './adapters/transformers-embedder.js';
 import type { PipelineFactory } from './adapters/transformers-embedder.js';
+import { WikidataVocabulary } from './adapters/wikidata-vocabulary.js';
+import { ClaudeLinker } from './adapters/claude-linker.js';
+import type { LinkerUsage } from './adapters/claude-linker.js';
 import { resolvePaths, ensurePaths } from './config.js';
 import type { Paths } from './config.js';
 import { warn } from './output.js';
@@ -26,6 +30,13 @@ export interface OpenOptions {
   env?: NodeJS.ProcessEnv;
   /** Injected in tests. */
   pipelineFactory?: PipelineFactory;
+  /** Wire concept linking. Off unless a command needs it. */
+  linking?: boolean;
+  linkerModel?: string;
+  linkerEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  /** Injected in tests, in place of the real Wikidata and Claude clients. */
+  vocabulary?: VocabularyClient;
+  linker?: Linker;
 }
 
 export interface CliContext {
@@ -33,6 +44,8 @@ export interface CliContext {
   paths: Paths;
   embedderKind: EmbedderChoice;
   embedder: Embedder | null;
+  /** Token usage accumulated by the linker, for the cost line. */
+  linkerUsage: LinkerUsage[];
   close(): Promise<void>;
 }
 
@@ -70,10 +83,29 @@ export async function openCognis(opts: OpenOptions = {}): Promise<CliContext> {
 
   const { embedder, kind } = buildEmbedder(paths, opts);
 
+  const linkerUsage: LinkerUsage[] = [];
+  let vocabulary: VocabularyClient | undefined = opts.vocabulary;
+  let linker: Linker | undefined = opts.linker;
+
+  if (opts.linking && !vocabulary) {
+    vocabulary = new WikidataVocabulary({
+      cacheDir: join(paths.home, 'wikidata-cache'),
+    });
+  }
+  if (opts.linking && !linker) {
+    linker = new ClaudeLinker({
+      ...(opts.linkerModel ? { model: opts.linkerModel } : {}),
+      ...(opts.linkerEffort ? { effort: opts.linkerEffort } : {}),
+      onUsage: (u) => linkerUsage.push(u),
+    });
+  }
+
   const cognis = new Cognis({
     db: new NodeSqliteDriver({ location: paths.dbPath }),
     clock: systemClock,
     ...(embedder ? { embedder } : {}),
+    ...(vocabulary ? { vocabulary } : {}),
+    ...(linker ? { linker } : {}),
   });
   await cognis.migrate();
 
@@ -89,6 +121,7 @@ export async function openCognis(opts: OpenOptions = {}): Promise<CliContext> {
     paths,
     embedderKind: kind,
     embedder,
+    linkerUsage,
     close: () => cognis.close(),
   };
 }
