@@ -187,7 +187,10 @@ export interface DoctorReport {
  */
 export async function doctor(
   cognis: Cognis,
-  opts: { dbPath: string; modelDir: string; embedderKind: string },
+  opts: {
+    dbPath: string; modelDir: string; embedderKind: string;
+    ollama?: { baseUrl: string; model: string; listModels(): Promise<string[]> };
+  },
 ): Promise<DoctorReport> {
   const checks: DoctorReport['checks'] = [];
 
@@ -239,6 +242,32 @@ export async function doctor(
         : `MIXED MODELS: ${models.map((m) => `${m.model_id} (${m.n})`).join(', ')} — ` +
           'novelty and search across these are meaningless; run `cognis reindex --all`',
   });
+
+  if (opts.ollama) {
+    try {
+      const models = await opts.ollama.listModels();
+      const present = models.includes(opts.ollama.model);
+      checks.push({
+        name: 'ollama',
+        ok: present,
+        detail: present
+          ? `${opts.ollama.baseUrl} — ${opts.ollama.model} is pulled`
+          : `${opts.ollama.baseUrl} reachable, but ${opts.ollama.model} is not pulled ` +
+            `(has: ${models.slice(0, 5).join(', ') || 'nothing'}). ` +
+            `Run: ollama pull ${opts.ollama.model}`,
+      });
+    } catch (err) {
+      // Keep the remedy: for an unreachable server it is the whole point, and
+      // "fetch failed" on its own tells the user nothing actionable.
+      checks.push({
+        name: 'ollama',
+        ok: false,
+        detail: err instanceof Error
+          ? err.message.split('\n').filter(Boolean).join('\n' + ' '.repeat(23))
+          : String(err),
+      });
+    }
+  }
 
   return { checks, ok: checks.every((c) => c.ok) };
 }

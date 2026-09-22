@@ -13,12 +13,15 @@ import { TransformersEmbedder, DEFAULT_MODEL, DEFAULT_DIM } from './adapters/tra
 import type { PipelineFactory } from './adapters/transformers-embedder.js';
 import { WikidataVocabulary } from './adapters/wikidata-vocabulary.js';
 import { ClaudeLinker } from './adapters/claude-linker.js';
+import { OllamaLinker } from './adapters/ollama-linker.js';
+import type { OllamaUsage } from './adapters/ollama-linker.js';
 import type { LinkerUsage } from './adapters/claude-linker.js';
 import { resolvePaths, ensurePaths } from './config.js';
 import type { Paths } from './config.js';
 import { warn } from './output.js';
 
 export type EmbedderChoice = 'transformers' | 'hash' | 'none';
+export type LinkerChoice = 'claude' | 'ollama';
 
 export interface OpenOptions {
   /** Which embedder to wire. Defaults to transformers. */
@@ -32,8 +35,13 @@ export interface OpenOptions {
   pipelineFactory?: PipelineFactory;
   /** Wire concept linking. Off unless a command needs it. */
   linking?: boolean;
+  linkerKind?: LinkerChoice;
   linkerModel?: string;
   linkerEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  /** Ollama server, when the tunnel is not on the default port. */
+  ollamaUrl?: string;
+  ollamaTimeoutMs?: number;
+  ollamaNumCtx?: number;
   /** Injected in tests, in place of the real Wikidata and Claude clients. */
   vocabulary?: VocabularyClient;
   linker?: Linker;
@@ -44,8 +52,11 @@ export interface CliContext {
   paths: Paths;
   embedderKind: EmbedderChoice;
   embedder: Embedder | null;
-  /** Token usage accumulated by the linker, for the cost line. */
+  /** Token usage accumulated by a paid linker, for the cost line. */
   linkerUsage: LinkerUsage[];
+  /** Local-inference statistics, when the Ollama linker is wired. */
+  ollamaUsage: OllamaUsage[];
+  linkerKind: LinkerChoice | null;
   close(): Promise<void>;
 }
 
@@ -84,8 +95,10 @@ export async function openCognis(opts: OpenOptions = {}): Promise<CliContext> {
   const { embedder, kind } = buildEmbedder(paths, opts);
 
   const linkerUsage: LinkerUsage[] = [];
+  const ollamaUsage: OllamaUsage[] = [];
   let vocabulary: VocabularyClient | undefined = opts.vocabulary;
   let linker: Linker | undefined = opts.linker;
+  const linkerKind: LinkerChoice = opts.linkerKind ?? 'claude';
 
   if (opts.linking && !vocabulary) {
     vocabulary = new WikidataVocabulary({
@@ -93,11 +106,19 @@ export async function openCognis(opts: OpenOptions = {}): Promise<CliContext> {
     });
   }
   if (opts.linking && !linker) {
-    linker = new ClaudeLinker({
-      ...(opts.linkerModel ? { model: opts.linkerModel } : {}),
-      ...(opts.linkerEffort ? { effort: opts.linkerEffort } : {}),
-      onUsage: (u) => linkerUsage.push(u),
-    });
+    linker = linkerKind === 'ollama'
+      ? new OllamaLinker({
+          baseUrl: opts.ollamaUrl ?? paths.ollamaUrl,
+          ...(opts.linkerModel ? { model: opts.linkerModel } : {}),
+          ...(opts.ollamaTimeoutMs ? { timeoutMs: opts.ollamaTimeoutMs } : {}),
+          ...(opts.ollamaNumCtx ? { numCtx: opts.ollamaNumCtx } : {}),
+          onUsage: (u) => ollamaUsage.push(u),
+        })
+      : new ClaudeLinker({
+          ...(opts.linkerModel ? { model: opts.linkerModel } : {}),
+          ...(opts.linkerEffort ? { effort: opts.linkerEffort } : {}),
+          onUsage: (u) => linkerUsage.push(u),
+        });
   }
 
   const cognis = new Cognis({
@@ -122,6 +143,8 @@ export async function openCognis(opts: OpenOptions = {}): Promise<CliContext> {
     embedderKind: kind,
     embedder,
     linkerUsage,
+    ollamaUsage,
+    linkerKind: opts.linking ? linkerKind : null,
     close: () => cognis.close(),
   };
 }

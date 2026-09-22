@@ -97,7 +97,7 @@ schema and in review.
 | Taxonomy tree from vocabulary hierarchy | done |
 | Linking eval harness (precision, recall, NIL, identity stability) | done |
 | **≥200-mention labelled eval set** | **seed set only — see [eval/README.md](eval/README.md)** |
-| Wikidata client; model-backed linker | **done in the CLI** — see [packages/cli](packages/cli) |
+| Wikidata client; model-backed linker | **done in the CLI** — Claude and Ollama, see [packages/cli](packages/cli) |
 
 | M3 item | State |
 |---|---|
@@ -219,7 +219,7 @@ packages/core/src/
 
 packages/cli/src/
   adapters/         real fetching, Readability extraction, transformers.js,
-                    Wikidata vocabulary, Claude linker
+                    Wikidata vocabulary, Claude and Ollama linkers
   commands/         ingest, index, reporting, doctor
   bin.ts            entry point
 ```

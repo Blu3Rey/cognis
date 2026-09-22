@@ -81,6 +81,48 @@ send a private source anywhere.
 
 Credentials come from `ANTHROPIC_API_KEY`, or from an `ant auth login` profile.
 
+### Running the linker locally, via Ollama
+
+```bash
+# If Ollama is on another machine, tunnel first — it has no authentication,
+# so exposing 11434 to a network is a bad idea.
+ssh -N -L 11434:localhost:11434 you@gpu-box
+
+cognis doctor --linker ollama          # is it reachable, is the model pulled?
+cognis link --linker ollama            # free, slower, and a different model
+```
+
+Defaults to `qwen3:14b`. Override with `--linker-model`, point elsewhere with
+`--ollama-url` or `COGNIS_OLLAMA_URL`.
+
+**Both linkers send byte-identical instructions and rendering, and share the
+reconciliation guard.** That is deliberate: the reason to have two is to
+compare them on the same labelled set, and two prompts would measure the
+prompt rather than the model. A parity test asserts it.
+
+Local inference changes which things go wrong, so three are handled explicitly:
+
+- **`num_ctx` is set to 8192, not left at the server default.** Ollama silently
+  truncates a prompt longer than the context window, so a chunk plus a dozen
+  candidates would overflow and the model would answer confidently about
+  candidates it never saw. `cognis link` warns when a chunk fills the window.
+- **Malformed output degrades to NIL** for that chunk rather than failing the
+  document, and is counted in the run report. A smaller model holds an output
+  contract more loosely; reasoning blocks and code fences are stripped before
+  parsing.
+- **Timeouts are generous** (180s) because a 14B model on modest hardware is
+  slow, and the error says so rather than looking like a network fault.
+
+| | Claude | Ollama |
+|---|---|---|
+| Cost | ~$5/MTok in, $25/MTok out | free |
+| Speed | fast | slow |
+| Prompt caching | yes | not applicable |
+| Refusals | server-side fallbacks | rarely applicable |
+| Quality on candidate disambiguation | **unmeasured** | **unmeasured** |
+
+That last row is the honest one, and it is the same row for both.
+
 Three things the adapter is deliberate about:
 
 - **It cannot invent an identifier.** Any concept id the model returns that was
@@ -129,7 +171,7 @@ API, so a batch path has to handle refusals itself.
 | `privacy log` | Everything that has left this device |
 | `privacy set <id> --private\|--public` | Exclude a source from egress |
 | `privacy check <url>` | How a URL would be classified |
-| `link [--all] [--dry-run]` | Resolve concepts, roll up coverage |
+| `link [--all] [--dry-run] [--linker claude\|ollama]` | Resolve concepts, roll up coverage |
 | `concepts [--limit N]` | What the corpus is about |
 | `gaps [--min-sources N]` | Met from several sources, never covered directly |
 | `export <path>` / `import <path>` | Full JSONL round-trip |
@@ -163,7 +205,9 @@ PDFs are not implemented yet.
 | Claude linker — id validation, refusal handling, cache placement, offsets, cost | **Verified** against a stub client |
 | **The real embedding model loading** | **Not verified.** `huggingface.co` is blocked at the CONNECT level in the environment this was built in. `cognis doctor` checks it on a machine with access. |
 | **The real Wikidata API** | **Not verified.** `wikidata.org` is blocked in the same environment. |
+| Ollama linker — context guard, malformed output, error remedies, parity with the Claude linker | **Verified** against a stub server |
 | **The real Claude API accepting this request shape** | **Not verified.** No API key here. `cognis link --dry-run` costs nothing; the first real `cognis link` is the test. |
+| **A real Ollama server** | **Not verified.** Nothing to reach from here. `cognis doctor --linker ollama` is the check, and its unreachable-server path *is* exercised. |
 
 That last row is the honest gap. The code is written and its surroundings are
 tested; the weights have never been downloaded by this code.
