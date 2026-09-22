@@ -41,8 +41,14 @@ export const DEFAULT_OLLAMA_MODEL = 'qwen3:14b';
  * instructions overflows, the model sees a prompt cut off mid-list, and it
  * answers confidently about candidates it never saw. Setting it explicitly is
  * not tuning, it is correctness.
+ *
+ * 16384 rather than 8192: measured prompts run 4-6k tokens, which fits in 8192
+ * but leaves a chunk with an unusually long candidate list nowhere to go. The
+ * cost is KV cache — roughly a gigabyte of VRAM at this size for a 14B model —
+ * so on a card that cannot spare it, pass a smaller `--num-ctx` and watch the
+ * truncation warning rather than letting layers spill to CPU.
  */
-export const DEFAULT_NUM_CTX = 8192;
+export const DEFAULT_NUM_CTX = 16384;
 
 /** Local inference is slow. A 14B model on modest hardware takes real time. */
 export const DEFAULT_TIMEOUT_MS = 180_000;

@@ -34,6 +34,26 @@ export interface LinkOptions extends SpotOptions {
   minConfidence?: number;
   /** Create `local:` concepts for NIL decisions. */
   createLocalConcepts?: boolean;
+  /**
+   * Called as each chunk moves through the loop.
+   *
+   * Linking is one network round-trip per surface form plus one model call per
+   * chunk, so a document takes tens of seconds and a corpus takes minutes. A
+   * caller with no way to observe that cannot tell work from a hang, and will
+   * kill the run. Core does not print — it reports, and the CLI decides how.
+   */
+  onProgress?: (event: LinkProgress) => void;
+}
+
+export interface LinkProgress {
+  documentVersionId: Ulid;
+  /** 1-based, so `3/17` reads correctly without arithmetic at the call site. */
+  chunk: number;
+  chunks: number;
+  /** `candidates` before the vocabulary lookups, `linked` after the model call. */
+  phase: 'candidates' | 'linked';
+  /** Surface forms spotted in this chunk. Zero means no calls are made. */
+  spotted: number;
 }
 
 export interface LinkReport {
@@ -150,11 +170,21 @@ export async function linkDocument(
   const perChunk: { chunkId: string; decisions: LinkDecision[] }[] = [];
   const candidateById = new Map<string, ConceptCandidate>();
 
-  for (const chunk of chunks) {
+  for (const [index, chunk] of chunks.entries()) {
     report.chunksProcessed++;
     const spots = spotMentions(chunk.text, opts);
     report.spotted += spots.length;
-    if (spots.length === 0) continue;
+    const progress = (phase: LinkProgress['phase']): void => {
+      opts.onProgress?.({
+        documentVersionId, chunk: index + 1, chunks: chunks.length,
+        phase, spotted: spots.length,
+      });
+    };
+    if (spots.length === 0) {
+      progress('linked');
+      continue;
+    }
+    progress('candidates');
 
     const mentions: SpottedMention[] = [];
     for (const spot of spots) {
@@ -191,6 +221,7 @@ export async function linkDocument(
       () => linker.disambiguate(request),
     );
     perChunk.push({ chunkId: chunk.id, decisions });
+    progress('linked');
   }
 
   const overrides = await loadOverrides(db);

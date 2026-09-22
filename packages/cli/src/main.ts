@@ -16,9 +16,12 @@ import {
   corpusStats, sourceDetail, recentCaptures, doctor,
 } from './commands/report.js';
 import { linkCorpus, coverageGaps, topConcepts } from './commands/link.js';
+// Value import, but the module pulls in nothing heavier than the shared prompt,
+// so it does not undo the lazy loading that keeps the SDK off the startup path.
+import { DEFAULT_NUM_CTX } from './adapters/ollama-linker.js';
 import {
   info, success, warn, fail, json, pairs, table, bold, dim, green, yellow,
-  ellipsis, relativeTime,
+  ellipsis, relativeTime, progressLine,
 } from './output.js';
 
 const HELP = `${bold('cognis')} — personal knowledge management, on your own corpus
@@ -64,7 +67,7 @@ ${bold('OPTIONS')}
   --effort <low|medium|high|xhigh|max>  Claude linker effort. Default: low
   --ollama-url <url>                    Default: http://127.0.0.1:11434
   --ollama-timeout <seconds>            Default: 180
-  --num-ctx <n>                         Ollama context window. Default: 8192
+  --num-ctx <n>                         Ollama context window. Default: 16384
   --dry-run                             Show what link would process, spend nothing
   --min-words N                         Short-document floor (fetched pages default 50)
   --private                             Force a capture private
@@ -113,7 +116,7 @@ async function main(argv: string[]): Promise<number> {
       openOpts.ollamaTimeoutMs = flagNumber(args.flags, 'ollama-timeout', 180) * 1000;
     }
     if (args.flags.has('num-ctx')) {
-      openOpts.ollamaNumCtx = flagNumber(args.flags, 'num-ctx', 8192);
+      openOpts.ollamaNumCtx = flagNumber(args.flags, 'num-ctx', DEFAULT_NUM_CTX);
     }
   }
 
@@ -235,7 +238,31 @@ async function main(argv: string[]): Promise<number> {
           return 0;
         }
 
-        const report = await linkCorpus(ctx.cognis, ctx.linkerUsage, { all, limit });
+        // Linking is minutes of network and model calls. Without a live line
+        // the terminal is indistinguishable from a hang, and the run gets
+        // killed halfway through (see packages/cli/README.md § Progress).
+        const line = progressLine();
+        const startedAt = Date.now();
+        let chunksDone = 0;
+        const report = await linkCorpus(ctx.cognis, ctx.linkerUsage, {
+          all, limit,
+          onProgress: (e) => {
+            if (e.phase === 'linked') chunksDone++;
+            const elapsed = (Date.now() - startedAt) / 1000;
+            const rate = chunksDone > 0 ? elapsed / chunksDone : 0;
+            const eta = rate > 0 && e.chunks > e.chunk
+              ? ` · ~${Math.ceil((rate * (e.chunks - e.chunk)) / 60)}m left in this doc`
+              : '';
+            const what = e.phase === 'candidates'
+              ? `looking up ${e.spotted} term(s)`
+              : 'linked';
+            line.update(
+              `  doc ${e.document}/${e.documents} · chunk ${e.chunk}/${e.chunks} · ${what}${eta}`,
+            );
+          },
+          onStage: (stage) => line.update(`  ${stage}…`),
+        });
+        line.clear();
         if (asJson) { json(report); return report.failed.length ? 1 : 0; }
 
         success(`linked ${report.linked}/${report.documents} documents`);

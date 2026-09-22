@@ -85,3 +85,37 @@ export function relativeTime(iso: string, now: Date = new Date()): string {
   if (diff < 365 * day) return `${Math.round(diff / (30 * day))}mo ago`;
   return `${(diff / (365 * day)).toFixed(1)}y ago`;
 }
+
+/**
+ * A single status line that redraws in place.
+ *
+ * Long-running commands are network- and model-bound, and a terminal that says
+ * nothing for fifteen minutes reads as a hang — the user kills the run and
+ * throws the work away. Progress goes to stderr so `--json` on stdout stays
+ * machine-readable, and falls back to nothing when stderr is not a TTY, so a
+ * log file does not fill with redraws.
+ */
+export function progressLine(): {
+  update(message: string): void;
+  clear(): void;
+} {
+  const tty = process.stderr.isTTY === true && !process.env['NO_COLOR'];
+  let width = 0;
+
+  return {
+    update(message: string): void {
+      if (!tty) return;
+      const columns = process.stderr.columns ?? 80;
+      const text = message.length > columns - 1
+        ? `${message.slice(0, columns - 2)}…`
+        : message;
+      process.stderr.write(`\r${text}${' '.repeat(Math.max(0, width - text.length))}`);
+      width = text.length;
+    },
+    clear(): void {
+      if (!tty || width === 0) return;
+      process.stderr.write(`\r${' '.repeat(width)}\r`);
+      width = 0;
+    },
+  };
+}

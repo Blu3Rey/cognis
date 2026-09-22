@@ -8,7 +8,7 @@
  * that set exists.
  */
 
-import type { Cognis, LinkReport } from '@cognis/core';
+import type { Cognis, LinkReport, LinkProgress } from '@cognis/core';
 import type { LinkerUsage } from '../adapters/claude-linker.js';
 import { estimateCost } from '../adapters/claude-linker.js';
 
@@ -25,10 +25,26 @@ export interface LinkRunReport {
   cost: ReturnType<typeof estimateCost>;
 }
 
+export interface LinkRunProgress extends LinkProgress {
+  /** 1-based position of this document in the run. */
+  document: number;
+  documents: number;
+}
+
 export async function linkCorpus(
   cognis: Cognis,
   usage: LinkerUsage[],
-  opts: { all?: boolean; limit?: number } = {},
+  opts: {
+    all?: boolean;
+    limit?: number;
+    /**
+     * Reported per chunk. A run is minutes of silent network and model calls
+     * otherwise, which is indistinguishable from a hang.
+     */
+    onProgress?: (event: LinkRunProgress) => void;
+    /** Reported when the run moves into a derived-table rebuild. */
+    onStage?: (stage: string) => void;
+  } = {},
 ): Promise<LinkRunReport> {
   // Documents with no mentions yet, unless --all. Private sources are excluded
   // in SQL rather than by a check the caller could forget (docs/09).
@@ -54,9 +70,17 @@ export async function linkCorpus(
     cost: estimateCost([]),
   };
 
-  for (const doc of docs) {
+  for (const [index, doc] of docs.entries()) {
     try {
-      const result: LinkReport = await cognis.linkDocument(doc.id);
+      const forward = opts.onProgress;
+      const result: LinkReport = await cognis.linkDocument(doc.id, {
+        ...(forward
+          ? {
+              onProgress: (e) =>
+                forward({ ...e, document: index + 1, documents: docs.length }),
+            }
+          : {}),
+      });
       if (result.skippedPrivate) {
         report.skippedPrivate++;
         continue;
@@ -75,8 +99,13 @@ export async function linkCorpus(
   }
 
   if (report.linked > 0) {
+    // Hierarchy import walks the vocabulary for every anchored concept, so it
+    // is another minutes-long silent stretch if nothing announces it.
+    opts.onStage?.('importing concept hierarchy');
     await cognis.importHierarchy();
+    opts.onStage?.('rolling up coverage');
     await cognis.rollupCoverage();
+    opts.onStage?.('building co-occurrence');
     await cognis.buildCooccurrence();
   }
 

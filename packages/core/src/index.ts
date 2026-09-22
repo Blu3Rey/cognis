@@ -59,7 +59,7 @@ export type { Spot, SpotOptions } from './concept/spotter.js';
 export {
   linkDocument, linkAll, importHierarchy, localKeyFor, LINKER_PIPELINE_VERSION,
 } from './concept/pipeline.js';
-export type { LinkOptions, LinkReport } from './concept/pipeline.js';
+export type { LinkOptions, LinkReport, LinkProgress } from './concept/pipeline.js';
 export {
   loadOverrides, applyOverrides, resolveConceptId, rejectionKey, pairKey,
 } from './concept/overrides.js';

@@ -132,3 +132,39 @@ test('linking is idempotent rather than accumulating duplicates', async () => {
   assert.equal(second!.n, first!.n);
   await cognis.close();
 });
+
+test('progress is reported before the slow work, not after it', async () => {
+  const { cognis } = await freshCognis();
+  const doc = await ingest(cognis, 'https://example.com/spacing', SPACING,
+    'Spaced repetition in practice');
+
+  const events: { chunk: number; chunks: number; phase: string }[] = [];
+  await cognis.linkDocument(doc.documentVersionId, {
+    onProgress: (e) => events.push({ chunk: e.chunk, chunks: e.chunks, phase: e.phase }),
+  });
+
+  assert.ok(events.length > 0, 'linking reported nothing at all');
+
+  // The point of the hook is that the caller hears from it BEFORE the network
+  // and model calls for a chunk, not only once they have returned. A run that
+  // only reports completions still looks like a hang for the first chunk.
+  assert.equal(events[0]?.phase, 'candidates');
+  assert.equal(events[0]?.chunk, 1);
+
+  // Every chunk ends with exactly one `linked`, including chunks that spotted
+  // nothing and made no calls — otherwise the counter stalls on a quiet chunk.
+  const linked = events.filter((e) => e.phase === 'linked');
+  const chunks = events[0]?.chunks ?? 0;
+  assert.equal(linked.length, chunks, `expected one completion per chunk`);
+  assert.deepEqual(linked.map((e) => e.chunk), [...Array(chunks).keys()].map((i) => i + 1));
+
+  await cognis.close();
+});
+
+test('linking without a progress hook still works', async () => {
+  const { cognis } = await freshCognis();
+  const doc = await ingest(cognis, 'https://example.com/spacing', SPACING, 'Spacing');
+  const report = await cognis.linkDocument(doc.documentVersionId);
+  assert.ok(report.anchored > 0);
+  await cognis.close();
+});

@@ -102,16 +102,39 @@ prompt rather than the model. A parity test asserts it.
 
 Local inference changes which things go wrong, so three are handled explicitly:
 
-- **`num_ctx` is set to 8192, not left at the server default.** Ollama silently
+- **`num_ctx` is set to 16384, not left at the server default.** Ollama silently
   truncates a prompt longer than the context window, so a chunk plus a dozen
   candidates would overflow and the model would answer confidently about
   candidates it never saw. `cognis link` warns when a chunk fills the window.
+  Measured prompts run 4-6k tokens; the headroom is for an unusually long
+  candidate list. Lower it with `--num-ctx` on a card that cannot spare the
+  KV cache — roughly a gigabyte at this size for a 14B model.
 - **Malformed output degrades to NIL** for that chunk rather than failing the
   document, and is counted in the run report. A smaller model holds an output
   contract more loosely; reasoning blocks and code fences are stripped before
   parsing.
 - **Timeouts are generous** (180s) because a 14B model on modest hardware is
   slow, and the error says so rather than looking like a network fault.
+
+## Progress
+
+`cognis link` prints a redrawing status line to **stderr**:
+
+```
+  doc 3/12 · chunk 7/19 · looking up 14 term(s) · ~2m left in this doc
+```
+
+This is not decoration. A link run is one throttled vocabulary lookup per
+surface form plus one model call per chunk, so a modest corpus is tens of
+minutes of work in which nothing returns. The first version printed only the
+final report, which is indistinguishable from a hang — the observed failure was
+a fifteen-minute run killed by hand while the GPU sat at 98% doing exactly what
+it was asked to.
+
+Progress goes to stderr so `--json` on stdout stays machine-readable, and is
+suppressed when stderr is not a TTY so log files do not fill with redraws. Use
+`cognis link --dry-run` first for the chunk count, which is what the run length
+is proportional to.
 
 | | Claude | Ollama |
 |---|---|---|
