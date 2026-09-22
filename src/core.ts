@@ -82,6 +82,14 @@ import {
   push, pull, saveKeyset, loadKeyset, deviceId, resetPullCursor,
 } from './sync/sync.js';
 import type { PushReport, PullReport } from './sync/sync.js';
+import { readEgressLog, egressSummary, isSourcePrivate } from './privacy/egress.js';
+import type { EgressEntry } from './privacy/egress.js';
+import { classifyUrl } from './privacy/domains.js';
+import type { PrivacyClassification } from './privacy/domains.js';
+import { timeline } from './coverage/timeline.js';
+import type { TimelineRow, TimelineOptions } from './coverage/timeline.js';
+import { deleteConceptHistory } from './capture/delete-concept.js';
+import type { ConceptDeleteReport } from './capture/delete-concept.js';
 import { toSource, toIngestionEvent } from './capture/rows.js';
 import type { SourceRow, IngestionEventRow } from './capture/rows.js';
 import type {
@@ -652,6 +660,58 @@ export class Cognis {
     }));
   }
 
+  // -- Views ---------------------------------------------------------------
+
+  /**
+   * The coverage timeline: what was covered when, and how it held up.
+   *
+   * Returns evidence, never a modelled retention figure — the gaps between
+   * marks are the point (docs/07 § View 3).
+   */
+  async timeline(opts: TimelineOptions): Promise<TimelineRow[]> {
+    return timeline(this.db, opts);
+  }
+
+  // -- Privacy controls ----------------------------------------------------
+
+  /**
+   * Mark a source private, or clear the flag.
+   *
+   * A private source is still ingested, chunked, embedded on-device, counted
+   * in coverage and searchable. It is simply never sent anywhere.
+   */
+  async setSourcePrivate(sourceId: Ulid, isPrivate: boolean): Promise<void> {
+    await this.db.run('UPDATE source SET is_private = ? WHERE id = ?', [
+      isPrivate ? 1 : 0, sourceId,
+    ]);
+  }
+
+  async isSourcePrivate(sourceId: Ulid): Promise<boolean> {
+    return isSourcePrivate(this.db, sourceId);
+  }
+
+  /** How a URL would be classified, without capturing it. */
+  classifyUrl(url: string): PrivacyClassification {
+    return classifyUrl(url);
+  }
+
+  /**
+   * Everything that has left this device, newest first.
+   *
+   * docs/09 requires this be renderable in settings: a user of a system that
+   * reads over their shoulder is entitled to an accurate account of where that
+   * reading went.
+   */
+  async egressLog(opts: { from?: string; limit?: number } = {}): Promise<EgressEntry[]> {
+    return readEgressLog(this.db, opts);
+  }
+
+  async egressSummary(): Promise<
+    { destination: string; purpose: string; calls: number; bytes: number }[]
+  > {
+    return egressSummary(this.db);
+  }
+
   // -- Data rights ---------------------------------------------------------
 
   exportJsonl(): AsyncGenerator<string> {
@@ -668,6 +728,30 @@ export class Cognis {
 
   async deleteSource(sourceId: Ulid): Promise<DeleteReport> {
     return deleteSource(this.db, sourceId);
+  }
+
+  /**
+   * Remove a concept's mentions, items, reviews and memory state, leaving the
+   * sources intact. "Stop tracking this idea", not "I never read those".
+   */
+  async deleteConceptHistory(conceptId: string): Promise<ConceptDeleteReport> {
+    return deleteConceptHistory(this.db, conceptId);
+  }
+
+  /**
+   * Stream a full export to a caller-supplied sink.
+   *
+   * Core does not touch the filesystem — `node:fs` does not exist in a mobile
+   * JS runtime — so the destination is a callback rather than a path. The
+   * client writes it wherever it belongs.
+   */
+  async exportAll(sink: (line: string) => void | Promise<void>): Promise<{ lines: number }> {
+    let lines = 0;
+    for await (const line of this.exportJsonl()) {
+      await sink(line);
+      lines++;
+    }
+    return { lines };
   }
 
   async close(): Promise<void> {

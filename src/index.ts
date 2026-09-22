@@ -175,6 +175,23 @@ export type { SyncPayload, PushReport, PullReport } from './sync/sync.js';
 export { mergeRow, SYNCED_TABLES, APPLY_ORDER } from './sync/merge.js';
 export type { Row } from './sync/merge.js';
 
+export { classifyUrl } from './privacy/domains.js';
+export type { PrivacyClassification } from './privacy/domains.js';
+export { redactUrl, redactText } from './privacy/redact.js';
+export type { Redaction, RedactionResult } from './privacy/redact.js';
+export {
+  withEgress, logEgress, readEgressLog, egressSummary, privateSourceIds,
+  isSourcePrivate, PrivateSourceError, EXCLUDE_PRIVATE_SQL,
+} from './privacy/egress.js';
+export type { EgressRequest, EgressEntry } from './privacy/egress.js';
+
+export { timeline, bucket } from './coverage/timeline.js';
+export type {
+  TimelineRow, TimelineOptions, TimelineEncounter, TimelineReview, Granularity,
+} from './coverage/timeline.js';
+export { deleteConceptHistory } from './capture/delete-concept.js';
+export type { ConceptDeleteReport } from './capture/delete-concept.js';
+
 export { runLinkingEval, identityStability, formatReport } from './eval/linking.js';
 export type {
   GoldMention, GoldDocument, LinkingMetrics, LinkingEvalReport,

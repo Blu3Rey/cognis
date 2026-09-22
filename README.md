@@ -143,6 +143,14 @@ schema and in review.
 | Argon2id key derivation | **portable fallback is PBKDF2 — see [docs/09](docs/09-privacy-and-security.md)** |
 | Relay service; key enrolment UX | client/backend-side, not started |
 
+| Privacy enforcement | State |
+|---|---|
+| Private sources excluded from every model call | done |
+| Sensitive domains auto-marked private at capture | done |
+| Egress logged before the request, user-readable | done |
+| Credential and secret redaction before egress | done (best-effort, documented) |
+| `setSourcePrivate`, `egressLog`, `egressSummary` | done |
+
 Extraction and the UI are client concerns: core defines the ports and owns the
 state machine, and the client supplies the WebView extractor. See
 [ADR-0003](docs/adr/0003-stack-selection.md).
@@ -151,8 +159,10 @@ state machine, and the client supplies the WebView extractor. See
 
 ```bash
 npm install
-npm run check      # typecheck + build + test
+npm run check      # typecheck + build + test + manifest verification
 ```
+
+CI runs the same thing on every push ([.github/workflows/check.yml](.github/workflows/check.yml)).
 
 Requires Node ≥ 22.5 (the tests use the built-in `node:sqlite` and
 `node:test`). The core package has exactly one runtime dependency, `ts-fsrs`,
@@ -178,19 +188,22 @@ src/
   reader/           telemetry guards, engagement derivation, the prior
   graph/            bounded neighbourhood queries
   sync/             E2E crypto, change tracking, merge rules
+  privacy/          egress chokepoint, domain classification, redaction
   search/           semantic and literal search
   export/           JSONL export/import and the table manifest
   core.ts           the facade from docs/10-api-contract.md
 ```
 
-## Three things to fix before this is used for real
+## Two things to fix before this is used for real
 
 1. **Key derivation is PBKDF2, not Argon2id.** It is the strongest KDF Web
    Crypto offers, it is behind a port, and the deviation is documented — but
    it is a deviation from what [docs/09](docs/09-privacy-and-security.md)
    specifies, and it is the only thing protecting a synced corpus.
 2. **Encryption at rest** on the device is still not wired up (open since M0).
-3. The two measurements below.
+   It needs the device SQLite adapter, not core changes.
+
+Plus the two measurements below.
 
 ## Two open measurements
 
